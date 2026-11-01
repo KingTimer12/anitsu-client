@@ -1,0 +1,39 @@
+MIT License
+
+Copyright (c) 2026 KingTimer12
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Aviso (não faz parte dos termos da licença acima)
+
+O Anitsu Client é um projeto independente e não oficial. Ele usa o acervo da
+Anitsu (anitsu.moe e nuvem.anitsu.moe), mas não tem nenhuma relação com a
+Anitsu: não é feito, mantido, apoiado nem endossado pela equipe da Anitsu.
+
+Todo o conteúdo que existe na plataforma é crédito da comunidade que o reúne,
+organiza e mantém. Este projeto não hospeda, armazena nem redistribui nenhum
+arquivo do acervo, e esta licença cobre apenas o código deste repositório.
+
+A finalidade do aplicativo é apenas facilitar o acesso ao acervo para quem já
+tem conta na Anitsu.
+
+Os dados de capa, sinopse, elenco e equipe vêm da API pública do AniList, que
+também não tem relação com este projeto.
