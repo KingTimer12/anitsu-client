@@ -53,6 +53,10 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   const [loaded, setLoaded] = createSignal(false);
   const [fatal, setFatal] = createSignal(false);
   let skipResolvedFor = "";
+  /** Carga em que as faixas já foram aplicadas (cada carga, inclusive nova tentativa, reaplica). */
+  let loadSeq = 0;
+  let tracksAppliedFor = -1;
+  const [expectedChapters, setExpectedChapters] = createSignal(0);
   /** Arquivo de onde já saímos para o próximo: evita avançar duas vezes. */
   let advancedFrom: string | null = null;
 
@@ -139,40 +143,22 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     retryTimer = setTimeout(() => void loadCurrent(pos()), wait);
   }
 
-  /** Arquivo aberto: decide abertura/encerramento e faixas com os dados já completos. */
+  /**
+   * Arquivo aberto. Só lê números do mpv aqui: ler `chapter-list`/`track-list`
+   * (formato node) pelo plugin derruba o app; esses chegam pelos eventos observados.
+   */
   async function onLoaded() {
     if (disposed || !mpv) return;
     const name = file().name;
+    const chapterCount = await mpv.get<number | null>("chapters", "int64").catch(() => 0);
+    if (disposed || file().name !== name) return;
     batch(() => {
+      setExpectedChapters(chapterCount ?? 0);
       setLoaded(true);
       setNetError(false);
       setFatal(false);
     });
     retryAttempt = 0;
-    const [d, chs, trs] = await Promise.all([
-      mpv.get<number | null>("duration", "double").catch(() => null),
-      mpv.get<Chapter[] | null>("chapter-list").catch(() => null),
-      mpv.get<Track[] | null>("track-list").catch(() => null),
-    ]);
-    if (disposed || file().name !== name) return;
-
-    // Faixas: a cada carga (inclusive numa nova tentativa, que volta ao padrão do arquivo).
-    const { sid, aid } = pickTracks(trs ?? [], playerStore.tracks(props.target.dir), settings());
-    if (sid !== null) setTrack("sid", sid);
-    if (aid !== null) setTrack("aid", aid);
-
-    // Abertura/encerramento: capítulos do arquivo, senão AniSkip (só animes). Uma vez por arquivo.
-    if (!d || skipResolvedFor === name) return;
-    skipResolvedFor = name;
-    const fromChapters = classifyChapters(chs ?? [], d);
-    if (fromChapters.op || fromChapters.ed) return setSkip(fromChapters);
-    const ep = episodeNumber(name);
-    const { malId, isAnime } = props.target;
-    if (!isAnime || !malId || ep === null) return;
-    void playerApi
-      .aniskip(malId, ep, d)
-      .then((t) => !disposed && file().name === name && setSkip(t))
-      .catch(() => {});
   }
 
   async function loadCurrent(startAt?: number) {
@@ -180,8 +166,10 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     playingPath = remotePath();
     const saved = playerStore.progress(playingPath);
     const start = startAt ?? (saved && !saved.watched ? saved.position : 0);
+    loadSeq++;
     batch(() => {
       setLoaded(false);
+      setExpectedChapters(0);
       setBuffering(true);
       setEof(false);
       setChapters([]);
@@ -294,7 +282,34 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     return num !== null ? `Episódio ${num}` : n.name;
   };
 
-  // --- Faixas: aplicadas em onLoaded; aqui só a escolha manual ---
+  // --- Abertura/encerramento: capítulos do arquivo, senão AniSkip (só animes). Uma vez por arquivo ---
+  createEffect(() => {
+    const d = dur();
+    const name = file().name;
+    const chs = chapters();
+    // Espera o arquivo aberto e a lista de capítulos completa (chega por evento, em qualquer ordem).
+    if (!loaded() || !d || skipResolvedFor === name || chs.length < expectedChapters()) return;
+    skipResolvedFor = name;
+    const fromChapters = classifyChapters(chs, d);
+    if (fromChapters.op || fromChapters.ed) return setSkip(fromChapters);
+    const ep = episodeNumber(name);
+    const { malId, isAnime } = props.target;
+    if (!isAnime || !malId || ep === null) return;
+    void playerApi
+      .aniskip(malId, ep, d)
+      .then((t) => !disposed && file().name === name && setSkip(t))
+      .catch(() => {});
+  });
+
+  // --- Faixas: lembradas do release ou idiomas preferidos, a cada carga ---
+  createEffect(() => {
+    const list = tracks();
+    if (!loaded() || !list.some((t) => t.type !== "video") || tracksAppliedFor === loadSeq) return;
+    tracksAppliedFor = loadSeq;
+    const { sid, aid } = pickTracks(list, playerStore.tracks(props.target.dir), settings());
+    if (sid !== null) setTrack("sid", sid);
+    if (aid !== null) setTrack("aid", aid);
+  });
   /** `sid`/`aid` precisam de inteiro; o plugin manda números como double, então vai como texto. */
   const setTrack = (prop: "sid" | "aid", id: number | "no") =>
     void mpv?.command("set", prop, String(id)).catch(() => {});
