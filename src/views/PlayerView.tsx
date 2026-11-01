@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeft, LoaderCircle, WifiOff } from "lucide-solid";
+import { ArrowLeft, CircleAlert, LoaderCircle, WifiOff } from "lucide-solid";
 import { batch, createEffect, createSignal, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
 import { Controls } from "../components/player/Controls";
 import { EpisodesPanel, SettingsMenu, TracksMenu } from "../components/player/Menus";
@@ -14,6 +14,8 @@ import {
   nextCardStart,
   nextEpisode,
   pickTracks,
+  canAutoAdvance,
+  retryDelay,
   type SkipTimes,
   type Track,
 } from "../lib/player/logic";
@@ -47,14 +49,18 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   const [netError, setNetError] = createSignal(false);
   const [skip, setSkip] = createSignal<SkipTimes>({ op: null, ed: null });
   const [nextCancelled, setNextCancelled] = createSignal(false);
+  /** Arquivo atual aberto pelo mpv (`file-loaded`). Antes disso, eventos podem ser do arquivo anterior. */
+  const [loaded, setLoaded] = createSignal(false);
+  const [fatal, setFatal] = createSignal(false);
   let skipResolvedFor = "";
-  let tracksAppliedFor = "";
+  /** Arquivo de onde já saímos para o próximo: evita avançar duas vezes. */
+  let advancedFrom: string | null = null;
 
   let mpv: Mpv | undefined;
   /** Caminho do arquivo tocando; guardado fora das props para o cleanup (props já desmontadas). */
   let playingPath = "";
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let retryDelay = 2000;
+  let retryAttempt = 0;
 
   const file = () => props.target.file;
   const remotePath = () => joinPath(props.target.dir, file().name);
@@ -80,7 +86,7 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   function onProp(name: string, value: unknown) {
     switch (name) {
       case "time-pos":
-        if (typeof value === "number") {
+        if (typeof value === "number" && loaded()) {
           setPos(value);
           recordProgress();
         }
@@ -111,18 +117,62 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
         setTracks(Array.isArray(value) ? (value as Track[]) : []);
         break;
       case "eof-reached":
-        setEof(!!value);
+        if (loaded()) setEof(!!value);
         break;
     }
   }
 
   function onEnd(reason: string) {
     if (reason !== "error") return;
-    // Rede caiu: tenta de novo na mesma posição, esperando cada vez mais.
-    setNetError(true);
+    // Falhou: tenta de novo na mesma posição, esperando cada vez mais, e desiste depois de 5.
     clearTimeout(retryTimer);
-    retryTimer = setTimeout(() => void loadCurrent(pos()), retryDelay);
-    retryDelay = Math.min(retryDelay * 2, 30_000);
+    const wait = retryDelay(retryAttempt++);
+    if (wait === null) {
+      batch(() => {
+        setNetError(false);
+        setBuffering(false);
+        setFatal(true);
+      });
+      return;
+    }
+    setNetError(true);
+    retryTimer = setTimeout(() => void loadCurrent(pos()), wait);
+  }
+
+  /** Arquivo aberto: decide abertura/encerramento e faixas com os dados já completos. */
+  async function onLoaded() {
+    if (disposed || !mpv) return;
+    const name = file().name;
+    batch(() => {
+      setLoaded(true);
+      setNetError(false);
+      setFatal(false);
+    });
+    retryAttempt = 0;
+    const [d, chs, trs] = await Promise.all([
+      mpv.get<number | null>("duration", "double").catch(() => null),
+      mpv.get<Chapter[] | null>("chapter-list").catch(() => null),
+      mpv.get<Track[] | null>("track-list").catch(() => null),
+    ]);
+    if (disposed || file().name !== name) return;
+
+    // Faixas: a cada carga (inclusive numa nova tentativa, que volta ao padrão do arquivo).
+    const { sid, aid } = pickTracks(trs ?? [], playerStore.tracks(props.target.dir), settings());
+    if (sid !== null) setTrack("sid", sid);
+    if (aid !== null) setTrack("aid", aid);
+
+    // Abertura/encerramento: capítulos do arquivo, senão AniSkip (só animes). Uma vez por arquivo.
+    if (!d || skipResolvedFor === name) return;
+    skipResolvedFor = name;
+    const fromChapters = classifyChapters(chs ?? [], d);
+    if (fromChapters.op || fromChapters.ed) return setSkip(fromChapters);
+    const ep = episodeNumber(name);
+    const { malId, isAnime } = props.target;
+    if (!isAnime || !malId || ep === null) return;
+    void playerApi
+      .aniskip(malId, ep, d)
+      .then((t) => !disposed && file().name === name && setSkip(t))
+      .catch(() => {});
   }
 
   async function loadCurrent(startAt?: number) {
@@ -131,17 +181,18 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     const saved = playerStore.progress(playingPath);
     const start = startAt ?? (saved && !saved.watched ? saved.position : 0);
     batch(() => {
+      setLoaded(false);
       setBuffering(true);
       setEof(false);
       setChapters([]);
       setTracks([]);
       if (startAt === undefined) {
+        // Arquivo novo (não uma nova tentativa do mesmo).
         setSkip({ op: null, ed: null });
         setNextCancelled(false);
+        setFatal(false);
         skipResolvedFor = "";
-        tracksAppliedFor = "";
-      }
-      if (startAt === undefined) {
+        retryAttempt = 0;
         setPos(start);
         setDur(0);
       }
@@ -149,8 +200,6 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     try {
       const url = await playerApi.streamUrl(remotePath(), file().size);
       await mpv.load(url, start);
-      setNetError(false);
-      retryDelay = 2000;
     } catch {
       onEnd("error");
     }
@@ -161,7 +210,7 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   onCleanup(() => (disposed = true));
   onMount(async () => {
     try {
-      mpv = await createMpv({ "demuxer-max-bytes": `${playerStore.settings().cacheMib}MiB` }, { onProp, onEnd });
+      mpv = await createMpv({ "demuxer-max-bytes": `${playerStore.settings().cacheMib}MiB` }, { onProp, onEnd, onLoaded: () => void onLoaded() });
     } catch (e) {
       console.error("mpv", e);
       setNetError(true);
@@ -204,29 +253,14 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   }
   function goNext() {
     const n = next();
-    if (!n) return;
+    const from = file().name;
+    if (!n || advancedFrom === from) return;
+    advancedFrom = from;
     recordProgress();
     void playerStore.flush();
     player.switchTo(n);
   }
   const toggleMenu = (m: Exclude<Menu, null>) => setMenu((cur) => (cur === m ? null : m));
-
-  // --- Abertura/encerramento: capítulos do arquivo, senão AniSkip (só animes) ---
-  createEffect(() => {
-    const d = dur();
-    const name = file().name;
-    if (!d || skipResolvedFor === name) return;
-    skipResolvedFor = name;
-    const fromChapters = classifyChapters(chapters(), d);
-    if (fromChapters.op || fromChapters.ed) return setSkip(fromChapters);
-    const ep = episodeNumber(name);
-    const { malId, isAnime } = props.target;
-    if (!isAnime || !malId || ep === null) return;
-    void playerApi
-      .aniskip(malId, ep, d)
-      .then((t) => file().name === name && setSkip(t))
-      .catch(() => {});
-  });
 
   const settings = () => playerStore.settings();
   const showSkip = () => {
@@ -242,7 +276,16 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   const showNext = () =>
     !!next() && dur() > 0 && !nextCancelled() && pos() >= nextCardStart(dur(), skip().ed, settings().countdownSec);
   createEffect(() => {
-    if (eof() && next() && settings().autoNext && !nextCancelled()) goNext();
+    const go = canAutoAdvance({
+      loaded: loaded(),
+      eof: eof(),
+      autoNext: settings().autoNext,
+      cancelled: nextCancelled(),
+      hasNext: !!next(),
+      advancedFrom,
+      current: file().name,
+    });
+    if (go) goNext();
   });
   const nextLabel = () => {
     const n = next();
@@ -251,17 +294,7 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     return num !== null ? `Episódio ${num}` : n.name;
   };
 
-  // --- Faixas: escolha lembrada do release ou idiomas preferidos ---
-  createEffect(() => {
-    const list = tracks();
-    const name = file().name;
-    // Só com o arquivo carregado (duração conhecida): antes disso o mpv recusa sid/aid.
-    if (!mpv || !dur() || !list.some((t) => t.type !== "video") || tracksAppliedFor === name) return;
-    tracksAppliedFor = name;
-    const { sid, aid } = pickTracks(list, playerStore.tracks(props.target.dir), settings());
-    if (sid !== null) setTrack("sid", sid);
-    if (aid !== null) setTrack("aid", aid);
-  });
+  // --- Faixas: aplicadas em onLoaded; aqui só a escolha manual ---
   /** `sid`/`aid` precisam de inteiro; o plugin manda números como double, então vai como texto. */
   const setTrack = (prop: "sid" | "aid", id: number | "no") =>
     void mpv?.command("set", prop, String(id)).catch(() => {});
@@ -398,6 +431,27 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
             <LoaderCircle class="size-10 animate-spin text-white/80 drop-shadow-lg" />
           </div>
         </Show>
+        <Show when={fatal()}>
+          <div class="absolute inset-0 grid place-items-center" role="alert">
+            <div class="flex flex-col items-center gap-3 rounded-2xl border border-line-strong bg-black/80 px-6 py-5 text-center text-sm backdrop-blur">
+              <CircleAlert class="size-6 text-danger" aria-hidden="true" />
+              <p>Não foi possível tocar este arquivo.</p>
+              <p class="max-w-72 text-xs text-muted">Pode ser a conexão, a sessão expirada ou um arquivo indisponível na nuvem.</p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  retryAttempt = 0;
+                  setFatal(false);
+                  void loadCurrent(pos());
+                }}
+                class="mt-1 rounded-lg bg-accent px-4 py-2 font-semibold text-white transition hover:brightness-110 active:scale-95"
+              >
+                Tentar de novo
+              </button>
+            </div>
+          </div>
+        </Show>
         <Show when={netError()}>
           <div class="absolute inset-0 grid place-items-center" role="alert">
             <div class="flex items-center gap-3 rounded-xl border border-line-strong bg-black/75 px-5 py-3 text-sm backdrop-blur">
@@ -422,6 +476,7 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
           <NextCard
             nextLabel={nextLabel()}
             countdown={settings().autoNext ? settings().countdownSec : null}
+            paused={paused()}
             onPlay={goNext}
             onCancel={() => setNextCancelled(true)}
           />

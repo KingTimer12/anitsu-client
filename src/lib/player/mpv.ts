@@ -27,6 +27,8 @@ export const OBSERVED = [
 export interface MpvEvents {
   onProp(name: string, value: unknown): void;
   onEnd(reason: string): void;
+  /** Arquivo aberto: duração, capítulos e faixas já disponíveis. */
+  onLoaded(): void;
 }
 
 export interface Mpv {
@@ -62,6 +64,7 @@ export async function createMpv(extra: Record<string, string>, events: MpvEvents
   const unProps = await observeProperties(OBSERVED, ({ name, data }) => events.onProp(name, data));
   const unEvents = await listenEvents((e) => {
     if (e.event === "end-file") events.onEnd(e.reason);
+    else if (e.event === "file-loaded") events.onLoaded();
   });
 
   return {

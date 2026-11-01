@@ -184,6 +184,8 @@ mod tests {
         start_delay: Duration,
         /// Libera o corpo em pedaços de 64 KiB com esse intervalo.
         chunk_delay: Option<Duration>,
+        /// Responde com este status (ex.: 416, 404) em vez do conteúdo.
+        status_override: Option<u16>,
     }
 
     impl Fake {
@@ -212,6 +214,16 @@ mod tests {
                 let guard = ActiveGuard(me.active.clone());
                 *me.last_path.lock().unwrap() = Some(path);
                 tokio::time::sleep(me.start_delay).await;
+                if let Some(status) = me.status_override {
+                    return Ok(UpstreamResponse {
+                        status,
+                        headers: vec![("Content-Range".into(), format!("bytes */{}", me.data.len()))],
+                        body: Box::pin(stream::once(async move {
+                            drop(guard);
+                            Ok(Bytes::new())
+                        })),
+                    });
+                }
 
                 let (a, b) = parse_range(range.as_deref(), me.data.len());
                 let slice = me.data[a..=b].to_vec();
@@ -254,6 +266,21 @@ mod tests {
         assert!(resp.headers().get("x-secret").is_none());
         let body = resp.bytes().await.unwrap();
         assert_eq!(&body[..], &fake.data[100..200]);
+    }
+
+    #[tokio::test]
+    async fn passes_through_error_status() {
+        for status in [404u16, 416] {
+            let fake = Fake { status_override: Some(status), ..Fake::new() };
+            let proxy = StreamProxy::start(fake).await.unwrap();
+            let resp = Client::new()
+                .get(proxy.url_for("ep.mkv"))
+                .header(RANGE, "bytes=9999999-")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), status);
+        }
     }
 
     #[tokio::test]

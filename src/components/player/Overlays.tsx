@@ -23,7 +23,14 @@ export function SkipButton(props: { onSkip(): void }) {
  * Cartão de próximo episódio. Com `countdown`, conta até zero e chama `onPlay`;
  * sem ele, só oferece o botão.
  */
-export function NextCard(props: { nextLabel: string; countdown: number | null; onPlay(): void; onCancel(): void }) {
+export function NextCard(props: {
+  nextLabel: string;
+  countdown: number | null;
+  /** Vídeo pausado: a contagem para junto. */
+  paused: boolean;
+  onPlay(): void;
+  onCancel(): void;
+}) {
   const [left, setLeft] = createSignal(props.countdown ?? 0);
 
   createEffect(
@@ -32,9 +39,12 @@ export function NextCard(props: { nextLabel: string; countdown: number | null; o
       (total) => {
         if (total === null) return;
         setLeft(total);
-        const started = performance.now();
+        let last = performance.now();
         const timer = setInterval(() => {
-          const remaining = Math.max(0, total - (performance.now() - started) / 1000);
+          const now = performance.now();
+          const step = props.paused ? 0 : (now - last) / 1000;
+          last = now;
+          const remaining = Math.max(0, left() - step);
           setLeft(remaining);
           if (remaining <= 0) {
             clearInterval(timer);

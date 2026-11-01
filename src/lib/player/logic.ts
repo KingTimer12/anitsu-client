@@ -32,8 +32,9 @@ export interface TrackPref {
 
 export const VIDEO_EXT = new Set([".mkv", ".mp4", ".avi", ".webm", ".m4v", ".mov", ".ts", ".wmv", ".flv"]);
 
-const OP_RE = /^(op|opening|intro|abertura)\b/i;
-const ED_RE = /^(ed|ending|outro|credits|encerramento)\b/i;
+// `(?![a-z])` em vez de `\b`: aceita "OP1"/"ED2"/"Opening1", recusa "Operation".
+const OP_RE = /^(op|opening|intro|abertura)(?![a-z])/i;
+const ED_RE = /^(ed|ending|outro|credits|encerramento)(?![a-z])/i;
 
 /** Abertura/encerramento pelos títulos dos capítulos; cada um vai até o capítulo seguinte. */
 export function classifyChapters(chapters: Chapter[], duration: number): SkipTimes {
@@ -132,4 +133,27 @@ export function formatTime(sec: number): string {
   const m = Math.floor((s % 3600) / 60);
   const ss = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/**
+ * Pode ir sozinho para o próximo episódio? Só com o arquivo atual carregado
+ * (um `eof` atrasado do arquivo anterior não conta) e uma vez por arquivo.
+ */
+export function canAutoAdvance(s: {
+  loaded: boolean;
+  eof: boolean;
+  autoNext: boolean;
+  cancelled: boolean;
+  hasNext: boolean;
+  advancedFrom: string | null;
+  current: string;
+}): boolean {
+  return s.loaded && s.eof && s.autoNext && !s.cancelled && s.hasNext && s.advancedFrom !== s.current;
+}
+
+const RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
+
+/** Espera antes da tentativa `attempt` (0, 1, ...); `null` = desistir. */
+export function retryDelay(attempt: number): number | null {
+  return RETRY_DELAYS[attempt] ?? null;
 }

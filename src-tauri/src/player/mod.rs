@@ -36,7 +36,7 @@ impl Upstream for NuvemUpstream {
             let auth = app.state::<AuthManager>();
             let resp = apis
                 .nuvem
-                .send(&auth, Method::GET, "preview", |r| {
+                .send_raw(&auth, Method::GET, "preview", |r| {
                     let r = r.query(&[("path", &path)]);
                     match &range {
                         Some(range) => r.header(RANGE, range),

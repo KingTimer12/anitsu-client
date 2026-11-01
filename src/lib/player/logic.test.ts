@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { FileEntry } from "../anitsu";
 import {
+  canAutoAdvance,
   classifyChapters,
+  retryDelay,
   episodeNumber,
   formatTime,
   isWatched,
@@ -32,6 +34,16 @@ describe("classifyChapters", () => {
       op: { start: 0, end: 90 },
       ed: { start: 1300, end: 1400 },
     });
+  });
+  it("OP1/ED2/Opening1 com número colado", () => {
+    expect(classifyChapters([ch("Prologue", 0), ch("OP1", 30), ch("A", 120), ch("ED2", 1300)], 1400)).toEqual({
+      op: { start: 30, end: 120 },
+      ed: { start: 1300, end: 1400 },
+    });
+    expect(classifyChapters([ch("Opening1", 0), ch("Main", 90)], 1400).op).toEqual({ start: 0, end: 90 });
+  });
+  it("palavras que só começam igual não contam (Operation, Education)", () => {
+    expect(classifyChapters([ch("Operation", 0), ch("Education", 600)], 1400)).toEqual({ op: null, ed: null });
   });
   it("sem capítulos", () => {
     expect(classifyChapters([], 1400)).toEqual({ op: null, ed: null });
@@ -125,5 +137,30 @@ describe("formatTime", () => {
     expect(formatTime(75)).toBe("1:15");
     expect(formatTime(3725)).toBe("1:02:05");
     expect(formatTime(0)).toBe("0:00");
+  });
+});
+
+describe("canAutoAdvance", () => {
+  const base = { loaded: true, eof: true, autoNext: true, cancelled: false, hasNext: true, advancedFrom: null, current: "ep1" };
+  it("avança no fim do arquivo carregado", () => {
+    expect(canAutoAdvance(base)).toBe(true);
+  });
+  it("não avança com arquivo novo ainda carregando (eof atrasado do anterior)", () => {
+    expect(canAutoAdvance({ ...base, loaded: false })).toBe(false);
+  });
+  it("não avança duas vezes a partir do mesmo arquivo", () => {
+    expect(canAutoAdvance({ ...base, advancedFrom: "ep1" })).toBe(false);
+  });
+  it("respeita cancelar e a configuração", () => {
+    expect(canAutoAdvance({ ...base, cancelled: true })).toBe(false);
+    expect(canAutoAdvance({ ...base, autoNext: false })).toBe(false);
+    expect(canAutoAdvance({ ...base, hasNext: false })).toBe(false);
+  });
+});
+
+describe("retryDelay", () => {
+  it("cresce e para depois de 5 tentativas", () => {
+    expect([0, 1, 2, 3, 4].map(retryDelay)).toEqual([2000, 4000, 8000, 16000, 30000]);
+    expect(retryDelay(5)).toBeNull();
   });
 });
