@@ -2,6 +2,5 @@
   "siteUrl": "https://anitsu.moe",
   "nuvemUrl": "https://nuvem.anitsu.moe",
   "supabaseUrl": "https://auth.anitsu.moe",
-  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzkxNzMwNDI5LCJleHAiOjE5NDk0MTA0Mjl9.vVKdnGvA4q4lZyZlLzQeO7qjc3J8kUlfnEke495fgjU",
   "sessionCookie": "sb-auth-auth-token"
 }
