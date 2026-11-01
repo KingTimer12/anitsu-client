@@ -106,6 +106,15 @@ describe("pickTracks", () => {
   it("idioma e título lembrados", () => {
     expect(pickTracks(tracks, { subOff: false, subLang: "eng", subTitle: "English" }, defaults).sid).toBe(1);
   });
+  it("códigos de 2 letras e com região (pt, pt-BR, en) batem com por/eng", () => {
+    const short: Track[] = [
+      { id: 1, type: "sub", lang: "en", title: "English", selected: true },
+      { id: 2, type: "sub", lang: "pt-BR", title: "Portuguese(Brazil)", selected: false },
+      { id: 3, type: "sub", lang: "es", title: "Spanish(Latin_America)", selected: false },
+      { id: 1, type: "audio", lang: "ja", selected: true },
+    ];
+    expect(pickTracks(short, undefined, defaults)).toEqual({ sid: 2, aid: 1 });
+  });
   it("idioma lembrado inexistente cai no padrão", () => {
     expect(pickTracks(tracks, { subOff: false, subLang: "spa" }, defaults).sid).toBe(2);
   });

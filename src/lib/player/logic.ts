@@ -86,9 +86,22 @@ export function nextCardStart(duration: number, ed: Interval | null, countdownSe
 
 const AUX_RE = /sign|song|forced/i;
 
-function bestOf(tracks: Track[], lang: string | undefined, title?: string): Track | undefined {
+/** ISO 639-1 → 639-2 dos idiomas comuns no acervo; arquivos usam os dois (e `pt-BR`). */
+const ISO1_TO_2: Record<string, string> = {
+  pt: "por", en: "eng", ja: "jpn", ko: "kor", es: "spa", zh: "chi", fr: "fre", de: "ger", it: "ita", ru: "rus", ar: "ara",
+};
+const ALIASES: Record<string, string> = { zho: "chi", fra: "fre", deu: "ger" };
+
+export function normalizeLang(lang: string | undefined): string | undefined {
   if (!lang) return undefined;
-  const same = tracks.filter((t) => t.lang === lang);
+  const base = lang.toLowerCase().split(/[-_]/)[0];
+  return ISO1_TO_2[base] ?? ALIASES[base] ?? base;
+}
+
+function bestOf(tracks: Track[], lang: string | undefined, title?: string): Track | undefined {
+  const want = normalizeLang(lang);
+  if (!want) return undefined;
+  const same = tracks.filter((t) => normalizeLang(t.lang) === want);
   return same.find((t) => title && t.title === title) ?? same.find((t) => !AUX_RE.test(t.title ?? "")) ?? same[0];
 }
 

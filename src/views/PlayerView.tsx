@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, LoaderCircle, WifiOff } from "lucide-solid";
-import { batch, createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { batch, createEffect, createSignal, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
 import { Controls } from "../components/player/Controls";
 import { EpisodesPanel, SettingsMenu, TracksMenu } from "../components/player/Menus";
 import { NextCard, SkipButton } from "../components/player/Overlays";
@@ -51,6 +51,8 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   let tracksAppliedFor = "";
 
   let mpv: Mpv | undefined;
+  /** Caminho do arquivo tocando; guardado fora das props para o cleanup (props já desmontadas). */
+  let playingPath = "";
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = 2000;
 
@@ -65,8 +67,8 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   // --- Progresso ---
   function recordProgress() {
     const d = dur();
-    if (!d) return;
-    playerStore.setProgress(remotePath(), {
+    if (!d || !playingPath) return;
+    playerStore.setProgress(playingPath, {
       position: pos(),
       duration: d,
       watched: isWatched(pos(), d, skip().ed),
@@ -125,7 +127,8 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
 
   async function loadCurrent(startAt?: number) {
     if (!mpv) return;
-    const saved = playerStore.progress(remotePath());
+    playingPath = remotePath();
+    const saved = playerStore.progress(playingPath);
     const start = startAt ?? (saved && !saved.watched ? saved.position : 0);
     batch(() => {
       setBuffering(true);
@@ -153,6 +156,9 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     }
   }
 
+  const owner = getOwner();
+  let disposed = false;
+  onCleanup(() => (disposed = true));
   onMount(async () => {
     try {
       mpv = await createMpv({ "demuxer-max-bytes": `${playerStore.settings().cacheMib}MiB` }, { onProp, onEnd });
@@ -161,16 +167,24 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
       setNetError(true);
       return;
     }
+    if (disposed) {
+      void mpv.destroy().catch(() => {});
+      mpv = undefined;
+      return;
+    }
     // Carrega o episódio inicial e cada troca (próximo, lista de episódios).
-    createEffect(on(() => file().name, () => void loadCurrent()));
+    // Depois do `await` não há dono reativo: reata ao do componente para o efeito morrer junto.
+    runWithOwner(owner, () => createEffect(on(() => file().name, () => void loadCurrent())));
     void appWindow.isFullscreen().then(setFullscreen);
   });
 
   onCleanup(() => {
+    // Primeiro parar o vídeo; nada aqui pode ler props (o <Show> já desmontou).
+    void mpv?.destroy().catch(() => {});
+    mpv = undefined;
     clearTimeout(retryTimer);
     recordProgress();
     void playerStore.flush();
-    void mpv?.destroy();
     if (fullscreen()) void appWindow.setFullscreen(false);
   });
 
@@ -241,14 +255,18 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   createEffect(() => {
     const list = tracks();
     const name = file().name;
-    if (!mpv || !list.length || tracksAppliedFor === name) return;
+    // Só com o arquivo carregado (duração conhecida): antes disso o mpv recusa sid/aid.
+    if (!mpv || !dur() || !list.some((t) => t.type !== "video") || tracksAppliedFor === name) return;
     tracksAppliedFor = name;
     const { sid, aid } = pickTracks(list, playerStore.tracks(props.target.dir), settings());
-    if (sid !== null) void mpv.set("sid", sid);
-    if (aid !== null) void mpv.set("aid", aid);
+    if (sid !== null) setTrack("sid", sid);
+    if (aid !== null) setTrack("aid", aid);
   });
+  /** `sid`/`aid` precisam de inteiro; o plugin manda números como double, então vai como texto. */
+  const setTrack = (prop: "sid" | "aid", id: number | "no") =>
+    void mpv?.command("set", prop, String(id)).catch(() => {});
   function chooseSub(t: Track | null) {
-    void mpv?.set("sid", t ? t.id : "no");
+    setTrack("sid", t ? t.id : "no");
     const prev = playerStore.tracks(props.target.dir);
     playerStore.setTracks(props.target.dir, {
       ...prev,
@@ -258,7 +276,7 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
     });
   }
   function chooseAudio(t: Track) {
-    void mpv?.set("aid", t.id);
+    setTrack("aid", t.id);
     const prev = playerStore.tracks(props.target.dir);
     playerStore.setTracks(props.target.dir, { subOff: false, ...prev, audioLang: t.lang, audioTitle: t.title });
   }

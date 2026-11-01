@@ -1,5 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Download, ExternalLink, Play, Star } from "lucide-solid";
+import { formatTime, videoFiles } from "../lib/player/logic";
+import { player } from "../lib/player/session";
+import { playerStore } from "../lib/player/store";
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, Show, Switch, type JSX } from "solid-js";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { filePaths, FileList } from "../components/FileList";
@@ -14,6 +17,7 @@ import { AnitsuError, joinPath, nuvem, type FileEntry } from "../lib/anitsu";
 import { downloads } from "../lib/downloads";
 import { formatNumber } from "../lib/format";
 import { folderTitle, folderYear, releaseTags, splitPath } from "../lib/library";
+import { episodeNumber as parseEpisodeNumber } from "../lib/player/logic";
 import { router } from "../lib/router";
 
 interface Props {
@@ -69,6 +73,38 @@ export function TitleView(props: Props) {
       const s = downloads.byPath(p)?.status;
       return s !== "done" && s !== "running" && s !== "queued";
     });
+
+  // --- Assistir / continuar ---
+  const videos = () => (filesListing() ? videoFiles(filesListing()!.files) : []);
+  function play(file: FileEntry) {
+    player.open({
+      dir: filesPath(),
+      file,
+      files: filesListing()!.files,
+      titlePath: props.titlePath,
+      malId: detail()?.idMal ?? null,
+      isAnime: props.type === "ANIME",
+      animeTitle: heading(),
+    });
+  }
+  /** Último episódio assistido deste release: continua nele ou vai para o seguinte. */
+  const resume = createMemo(() => {
+    const list = videos();
+    let last: { i: number; at: number; watched: boolean; when: number } | null = null;
+    list.forEach((f, i) => {
+      const p = playerStore.progress(joinPath(filesPath(), f.name));
+      if (p && (!last || p.updatedAt >= last.when)) last = { i, at: p.position, watched: p.watched, when: p.updatedAt };
+    });
+    const l = last as { i: number; at: number; watched: boolean } | null;
+    if (!l) return null;
+    if (!l.watched) return { file: list[l.i], at: l.at };
+    return list[l.i + 1] ? { file: list[l.i + 1], at: 0 } : null;
+  });
+  const resumeLabel = (r: { file: FileEntry; at: number }) => {
+    const n = parseEpisodeNumber(r.file.name);
+    const ep = n !== null ? `ep. ${n}` : "";
+    return r.at > 0 ? `Continuar ${ep} (${formatTime(r.at)})`.replace("  ", " ") : `Assistir ${ep}`.trim();
+  };
 
   // --- AniList ---
   const lookupName = () => seasonName() ?? titleName();
@@ -196,8 +232,16 @@ export function TitleView(props: Props) {
             </Show>
 
             <div class="mt-6 flex flex-wrap items-center gap-2">
+              <Show when={resume() ?? (videos()[0] ? { file: videos()[0], at: 0 } : null)}>
+                {(r) => (
+                  <Button variant="primary" onClick={() => play(r().file)}>
+                    <Play class="size-4" fill="currentColor" stroke-width={0} aria-hidden="true" />
+                    {resumeLabel(r())}
+                  </Button>
+                )}
+              </Show>
               <Button
-                variant="primary"
+                variant={videos().length ? "secondary" : "primary"}
                 disabled={!remaining().length}
                 onClick={() => downloads.startAll(remaining())}
               >
@@ -287,7 +331,7 @@ export function TitleView(props: Props) {
                   <p class="text-danger">{AnitsuError.from(filesListing.error).message}</p>
                 </Show>
                 <Show when={filesListing()} fallback={<div class="skeleton h-80 rounded-2xl" />}>
-                  <FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} />
+                  <FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} onPlay={play} />
                 </Show>
               </div>
             </Match>

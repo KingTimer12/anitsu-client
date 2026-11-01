@@ -61,7 +61,7 @@ export function SeekBar(props: {
       aria-valuemax={Math.round(props.duration)}
       aria-valuenow={Math.round(shown())}
       aria-valuetext={`${formatTime(shown())} de ${formatTime(props.duration)}`}
-      class="group relative flex h-5 cursor-pointer touch-none items-center"
+      class="group relative flex h-5 cursor-pointer touch-none items-center rounded-md outline-offset-2"
       onPointerDown={down}
       onPointerMove={move}
       onPointerUp={up}
