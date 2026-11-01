@@ -4,7 +4,7 @@
  * escuro a luminosidade é elevada mantendo o matiz.
  */
 
-const BRAND = "#ff7a18";
+const BRAND = "#e8283c";
 
 function hexToHsl(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());

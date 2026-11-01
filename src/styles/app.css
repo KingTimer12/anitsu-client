@@ -5,7 +5,7 @@
 /*
   Design system (UI/UX Pro Max → "Modern Dark / Cinema"):
   - Bases em camadas quase pretas (sem #000 puro), bordas hairline brancas translúcidas.
-  - Laranja Anitsu como marca; cada título injeta --accent* a partir da cor da capa.
+  - Vermelho higanbana (lírio-aranha) como marca; cada título injeta --accent* a partir da cor da capa.
   - Outfit (títulos) + Inter (texto). Ícones: Lucide.
   - Movimento: expo-out, 150–300ms, só transform/opacity.
 */
@@ -20,8 +20,8 @@
   --color-fg: #ededef;
   --color-muted: #9a9ea8;
   --color-faint: #767b85;
-  --color-brand: #ff7a18;
-  --color-brand-ink: #ffa25c;
+  --color-brand: #e8283c;
+  --color-brand-ink: #ff7a85;
   --color-danger: #f87171;
   --color-ok: #4ade80;
   --color-close: #c42b1c;
@@ -64,10 +64,10 @@
   }
   @keyframes pulse-ring {
     0% {
-      box-shadow: 0 0 0 0 rgb(255 122 24 / 0.55);
+      box-shadow: 0 0 0 0 rgb(232 40 60 / 0.55);
     }
     100% {
-      box-shadow: 0 0 0 10px rgb(255 122 24 / 0);
+      box-shadow: 0 0 0 10px rgb(232 40 60 / 0);
     }
   }
 }
@@ -82,10 +82,10 @@
 
 :root {
   color-scheme: dark;
-  --accent: #ff7a18;
-  --accent-ink: #ffa25c;
-  --accent-soft: rgb(255 122 24 / 0.16);
-  --accent-glow: rgb(255 122 24 / 0.3);
+  --accent: #e8283c;
+  --accent-ink: #ff7a85;
+  --accent-soft: rgb(232 40 60 / 0.16);
+  --accent-glow: rgb(232 40 60 / 0.3);
 }
 
 @layer base {

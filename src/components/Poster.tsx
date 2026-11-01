@@ -9,7 +9,7 @@ import { cx } from "./ui";
 /** Capa tipográfica para títulos sem correspondência no AniList. */
 function TypePoster(props: { name: string }) {
   return (
-    <div class="flex size-full items-end bg-[radial-gradient(120%_80%_at_100%_0%,rgb(255_122_24/0.25),transparent_60%)] bg-elevated p-3.5">
+    <div class="flex size-full items-end bg-[radial-gradient(120%_80%_at_100%_0%,rgb(232_40_60/0.25),transparent_60%)] bg-elevated p-3.5">
       <span class="font-display text-xl leading-none font-bold tracking-tight [overflow-wrap:anywhere]">
         {folderTitle(props.name)}
       </span>

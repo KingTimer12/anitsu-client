@@ -66,9 +66,9 @@ export function TitleBar(props: { center?: JSX.Element; actions?: JSX.Element; s
         type="button"
         onClick={() => router.go("")}
         class="mr-2 rounded-md px-1 font-display text-xl font-bold tracking-tight text-brand"
-        aria-label="Anitsu, ir para o início"
+        aria-label="Higanbana, ir para o início"
       >
-        anitsu
+        higanbana
       </button>
 
       <Show when={props.showNav}>

@@ -85,7 +85,7 @@ async fn wait_for_code(listener: &TcpListener) -> AuthResult<String> {
         };
         match parse_callback(&target) {
             Callback::Code(code) => {
-                respond(&mut stream, 200, &page(true, "Pronto! Você já pode fechar esta aba e voltar ao Anitsu.")).await;
+                respond(&mut stream, 200, &page(true, "Pronto! Você já pode fechar esta aba e voltar ao Higanbana.")).await;
                 return Ok(code);
             }
             Callback::Error(msg) => {
@@ -159,10 +159,10 @@ fn page(ok: bool, message: &str) -> String {
     let color = if ok { "#ff7a18" } else { "#ff6b6b" };
     let message = message.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     format!(
-        r#"<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Anitsu</title>
+        r#"<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Higanbana</title>
 <style>body{{margin:0;height:100vh;display:grid;place-items:center;background:#100e17;color:#ece8f4;font:16px/1.5 system-ui,sans-serif}}
 main{{max-width:420px;padding:24px}}h1{{margin:0 0 12px;font-size:56px;letter-spacing:-.04em;color:{color}}}p{{margin:0;color:#9a93ad}}</style>
-</head><body><main><h1>anitsu</h1><p>{message}</p></main></body></html>"#
+</head><body><main><h1>higanbana</h1><p>{message}</p></main></body></html>"#
     )
 }
 

@@ -40,7 +40,7 @@ impl AniList {
         let dir = app
             .path()
             .app_cache_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("anitsu-client"));
+            .unwrap_or_else(|_| std::env::temp_dir().join("higanbana-client"));
         Self {
             client: AniListClient::new(),
             matches: DiskCache::open(dir.join("anilist-matches.json"), MATCH_TTL),
