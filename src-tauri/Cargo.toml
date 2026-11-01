@@ -23,12 +23,18 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-tokio = { version = "1", features = ["time", "sync", "fs", "io-util", "net", "macros"] }
+tokio = { version = "1", features = ["time", "sync", "fs", "io-util", "net", "macros", "rt-multi-thread"] }
 tauri-plugin-http = { version = "2.8.3", features = ["json", "gzip", "brotli"] }
 thiserror = "2"
 sha2 = "0.10"
 getrandom = "0.3"
 tauri-plugin-libmpv = "0.3.2"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+urlencoding = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

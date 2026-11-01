@@ -2,6 +2,7 @@ mod anilist;
 mod auth;
 mod http;
 mod nuvem;
+mod player;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +14,7 @@ pub fn run() {
             auth::setup(app)?;
             http::setup(app)?;
             anilist::setup(app)?;
+            player::setup(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -30,6 +32,7 @@ pub fn run() {
             anilist::commands::anilist_lookup,
             anilist::commands::anilist_media,
             anilist::commands::anilist_season,
+            player::commands::player_stream_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
