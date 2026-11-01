@@ -53,13 +53,24 @@ export interface DownloadProgress {
 /** Caminho completo de um item dentro da listagem. */
 export const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
+/** Pastas do acervo que o app não mostra: `AniGUI (Downloader Oficial)` é de outro aplicativo. */
+const HIDDEN = [/^anigui\b/i];
+const isHidden = (name: string) => HIDDEN.some((re) => re.test(name.trim()));
+const hiddenPath = (path: string) => path.split("/").some(isHidden);
+
 /** API da nuvem.anitsu.moe (onde ficam os animes). */
 export const nuvem = {
   /** Lista diretório. `""` = raiz. */
-  list: (path = "") => invoke<Listing>("nuvem_list", { path }),
+  list: async (path = "") => {
+    const listing = await invoke<Listing>("nuvem_list", { path });
+    return { ...listing, files: listing.files.filter((f) => !isHidden(f.name)) };
+  },
 
   /** Busca pastas por nome. Resultados são diretórios (`path` vai direto em `list`). */
-  search: (query: string) => invoke<SearchResponse>("nuvem_search", { query }),
+  search: async (query: string) => {
+    const res = await invoke<SearchResponse>("nuvem_search", { query });
+    return { ...res, results: res.results.filter((r) => !hiddenPath(r.path)) };
+  },
 
   /**
    * Baixa em stream direto para o disco (Rust). Sem `dest`, vai para Downloads.

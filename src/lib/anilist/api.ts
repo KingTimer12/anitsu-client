@@ -10,7 +10,8 @@ export interface LookupItem {
 export const anilist = {
   lookup: (items: LookupItem[]) => invoke<(MediaSummary | null)[]>("anilist_lookup", { items }),
   media: (id: number) => invoke<MediaDetail>("anilist_media", { id }),
-  trending: () => invoke<MediaSummary[]>("anilist_trending"),
+  /** Animes da temporada atual, mais populares primeiro. */
+  season: () => invoke<MediaSummary[]>("anilist_season"),
 };
 
 const pending = new Map<string, { item: LookupItem; resolve: (m: MediaSummary | null) => void }[]>();

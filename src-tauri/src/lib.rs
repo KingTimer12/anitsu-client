@@ -28,7 +28,7 @@ pub fn run() {
             nuvem::commands::nuvem_download,
             anilist::commands::anilist_lookup,
             anilist::commands::anilist_media,
-            anilist::commands::anilist_trending,
+            anilist::commands::anilist_season,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

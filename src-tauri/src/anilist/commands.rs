@@ -15,10 +15,10 @@ pub async fn anilist_lookup(
     anilist.lookup(&items).await
 }
 
-/// Animes em alta no AniList.
+/// Animes da temporada atual no AniList.
 #[tauri::command]
-pub async fn anilist_trending(anilist: State<'_, AniList>) -> AniListResult<Value> {
-    anilist.trending().await
+pub async fn anilist_season(anilist: State<'_, AniList>) -> AniListResult<Value> {
+    anilist.season().await
 }
 
 /// Detalhe completo de uma mídia.

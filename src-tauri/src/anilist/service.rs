@@ -133,18 +133,26 @@ impl AniList {
             .collect())
     }
 
-    /// Animes em alta. Usa o cache de detalhes com chave própria.
-    pub async fn trending(&self) -> AniListResult<Value> {
-        const KEY: &str = "trending";
-        if let Some(v) = self.details.get(KEY) {
+    /// Animes da temporada atual. Usa o cache de detalhes com chave própria.
+    pub async fn season(&self) -> AniListResult<Value> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_default();
+        let (season, year) = queries::season_at(now);
+        let key = format!("season:{season}:{year}");
+        if let Some(v) = self.details.get(&key) {
             return Ok(v);
         }
-        let data = self.client.query(&queries::trending_query(), json!({})).await?;
+        let data = self
+            .client
+            .query(&queries::season_query(), json!({ "season": season, "year": year }))
+            .await?;
         let list = data
             .pointer("/Page/media")
             .cloned()
             .ok_or_else(|| AniListError::Decode("Page.media ausente".into()))?;
-        self.details.insert(KEY.into(), list.clone());
+        self.details.insert(key, list.clone());
         self.details.flush();
         Ok(list)
     }
