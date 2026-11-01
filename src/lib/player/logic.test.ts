@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileEntry } from "../anitsu";
 import {
   canAutoAdvance,
+  estimateEnding,
   classifyChapters,
   retryDelay,
   episodeNumber,
@@ -162,5 +163,16 @@ describe("retryDelay", () => {
   it("cresce e para depois de 5 tentativas", () => {
     expect([0, 1, 2, 3, 4].map(retryDelay)).toEqual([2000, 4000, 8000, 16000, 30000]);
     expect(retryDelay(5)).toBeNull();
+  });
+});
+
+describe("estimateEnding", () => {
+  it("anime de 20–30 min sem tempo conhecido: créditos ~1:30 antes do fim", () => {
+    expect(estimateEnding(1431, true)).toEqual({ start: 1341, end: 1431 });
+  });
+  it("fora da faixa de episódio de TV ou não-anime: sem estimativa", () => {
+    expect(estimateEnding(3486, true)).toBeNull();
+    expect(estimateEnding(600, true)).toBeNull();
+    expect(estimateEnding(1431, false)).toBeNull();
   });
 });

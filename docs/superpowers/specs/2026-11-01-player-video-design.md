@@ -38,7 +38,10 @@ O player deve ser bom para **maratonar**: pular abertura, ir sozinho para o pró
    - Se cancelar, o encerramento segue normalmente.
    - O próximo episódio é o arquivo de vídeo seguinte na mesma pasta, em ordem natural.
    - No último episódio da pasta não aparece cartão.
-   - **Sem tempo de encerramento conhecido:** o cartão aparece nos últimos segundos do arquivo, iguais à duração da contagem.
+   - **Como na Netflix: o cartão aparece no início dos créditos.**
+   - **Sem tempo de encerramento conhecido** (decisão do dono, 2026-11-01):
+     - em anime de 20–30 min, os créditos são estimados em ~1:30 antes do fim;
+     - fora disso, o cartão aparece nos últimos segundos do arquivo, iguais à duração da contagem.
 6. **Fontes dos tempos de abertura e encerramento**, em ordem:
    1. **capítulos do arquivo** (MKV);
    2. se não houver, a **API do AniSkip** como reserva;

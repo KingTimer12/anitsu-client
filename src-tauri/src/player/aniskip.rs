@@ -53,7 +53,11 @@ pub fn parse_response(status: u16, body: &str) -> Option<SkipTimes> {
                     .find(|r| r.skip_type == kind)
                     .map(|r| Interval { start: r.interval.start_time, end: r.interval.end_time })
             };
-            Some(SkipTimes { op: pick("op"), ed: pick("ed") })
+            // "mixed-*": abertura/encerramento sobre cenas do episódio; valem quando não há o puro.
+            Some(SkipTimes {
+                op: pick("op").or_else(|| pick("mixed-op")),
+                ed: pick("ed").or_else(|| pick("mixed-ed")),
+            })
         }
         _ => None,
     }
@@ -61,7 +65,7 @@ pub fn parse_response(status: u16, body: &str) -> Option<SkipTimes> {
 
 pub fn url(mal_id: u32, episode: u32, duration: f64) -> String {
     format!(
-        "{API}/skip-times/{mal_id}/{episode}?types[]=op&types[]=ed&episodeLength={}",
+        "{API}/skip-times/{mal_id}/{episode}?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength={}",
         duration.round() as i64
     )
 }
@@ -80,6 +84,24 @@ mod tests {
                 ed: Some(Interval { start: 1290.0, end: 1380.0 }),
             })
         );
+    }
+
+    #[test]
+    fn parse_mixed_types() {
+        let body = r#"{"found":true,"results":[{"interval":{"startTime":10.0,"endTime":100.0},"skipType":"mixed-op","skipId":"a","episodeLength":1420.0},{"interval":{"startTime":1300.0,"endTime":1390.0},"skipType":"mixed-ed","skipId":"b","episodeLength":1420.0}],"message":"","statusCode":200}"#;
+        assert_eq!(
+            parse_response(200, body),
+            Some(SkipTimes {
+                op: Some(Interval { start: 10.0, end: 100.0 }),
+                ed: Some(Interval { start: 1300.0, end: 1390.0 }),
+            })
+        );
+    }
+
+    #[test]
+    fn url_asks_mixed_types() {
+        let u = url(1, 2, 1420.4);
+        assert!(u.contains("types[]=mixed-op") && u.contains("types[]=mixed-ed"), "{u}");
     }
 
     #[test]

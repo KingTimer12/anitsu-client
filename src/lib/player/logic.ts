@@ -157,3 +157,15 @@ const RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
 export function retryDelay(attempt: number): number | null {
   return RETRY_DELAYS[attempt] ?? null;
 }
+
+/** Duração típica do encerramento de anime de TV (ED de ~1:30). */
+const TYPICAL_ED_SEC = 90;
+
+/**
+ * Sem capítulos nem AniSkip: estima os créditos ~1:30 antes do fim, só em
+ * episódios de anime de 20–30 min (formato de TV). Fora disso, `null`.
+ */
+export function estimateEnding(duration: number, isAnime: boolean): Interval | null {
+  if (!isAnime || duration < 20 * 60 || duration > 30 * 60) return null;
+  return { start: duration - TYPICAL_ED_SEC, end: duration };
+}

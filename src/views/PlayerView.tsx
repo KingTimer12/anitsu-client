@@ -15,6 +15,7 @@ import {
   nextEpisode,
   pickTracks,
   canAutoAdvance,
+  estimateEnding,
   retryDelay,
   type SkipTimes,
   type Track,
@@ -261,8 +262,10 @@ export function PlayerView(props: { target: PlayTarget; onClose: () => void }) {
   };
 
   // --- Próximo episódio ---
+  /** Início dos créditos: capítulos/AniSkip, senão estimativa (anime de TV), senão fim do arquivo. */
+  const endingFor = () => skip().ed ?? estimateEnding(dur(), props.target.isAnime);
   const showNext = () =>
-    !!next() && dur() > 0 && !nextCancelled() && pos() >= nextCardStart(dur(), skip().ed, settings().countdownSec);
+    !!next() && dur() > 0 && !nextCancelled() && pos() >= nextCardStart(dur(), endingFor(), settings().countdownSec);
   createEffect(() => {
     const go = canAutoAdvance({
       loaded: loaded(),
