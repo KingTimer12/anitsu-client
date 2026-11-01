@@ -1,14 +1,16 @@
+import { createStore } from "solid-js/store";
 import { lookupMedia } from "./anilist/api";
 import type { MediaSummary } from "./anilist/types";
 import { joinPath, nuvem } from "./anitsu";
 import { folderTitle } from "./library";
 
 /**
- * Descobre quais animes do AniList existem no acervo, pegando leve na API:
- * - lista a pasta da letra (`Animes/Letra X`) uma vez e compara nomes localmente,
- *   em vez de uma busca por título;
- * - no máximo 2 listagens ao mesmo tempo;
- * - resultado guardado por 12 h (abrir a Home de novo não faz requisição).
+ * Confere se um anime do AniList está no acervo. Feito sob demanda: o chamador
+ * pede só quando o card aparece na tela. Economia de API:
+ * - lista a pasta da letra (`Animes/Letra X`) uma vez e compara nomes localmente;
+ * - nomes parecidos são confirmados no AniList (lote + cache em disco);
+ * - no máximo 2 pedidos em paralelo;
+ * - cada título é conferido uma vez; resultado guardado por 12 h.
  */
 
 const ROOT = "Animes";
@@ -57,13 +59,41 @@ function loadStore(): Stored {
   return { at: Date.now(), paths: {} };
 }
 
-const store = loadStore();
-function saveStore() {
+const initial = loadStore();
+const storedAt = initial.at;
+
+/** Estado reativo: `undefined` = não conferido, `null` = não está no acervo, string = caminho. */
+const [state, setState] = createStore<Record<number, string | null>>(initial.paths);
+
+export function nuvemPath(id: number): string | null | undefined {
+  return state[id];
+}
+
+function save() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORE_KEY, JSON.stringify({ at: storedAt, paths: state }));
   } catch {
     // Ignora: cache é só conveniência.
   }
+}
+
+// --- Fila com limite de concorrência ---
+let active = 0;
+const waiting: (() => void)[] = [];
+function limit<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      active++;
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          active--;
+          waiting.shift()?.();
+        });
+    };
+    if (active < CONCURRENCY) run();
+    else waiting.push(run);
+  });
 }
 
 // --- Listagens de letra, uma vez cada ---
@@ -98,45 +128,37 @@ async function resolve(m: MediaSummary): Promise<string | null> {
       if (bases.has(n)) near.push(path);
     }
   }
-  // Nome parecido (ex.: sequência numa pasta com o nome base): confirma pelo AniList
-  // (lookup em lote e com cache em disco, não toca na nuvem).
+  // Nome parecido (ex.: sequência numa pasta com o nome base): confirma pelo AniList.
   for (const path of near) {
     const found = await lookupMedia(path.split("/").at(-1)!, "ANIME");
     if (found?.id === m.id) return path;
   }
-  // A pasta é da obra base e a temporada nova fica dentro dela: aceita a pasta base.
+  // A temporada nova costuma ficar dentro da pasta da obra base.
   return near[0] ?? null;
 }
 
-/**
- * Filtra os títulos que existem no acervo. `onFound` é chamado conforme cada um resolve.
- */
-export async function filterInNuvem(
-  items: MediaSummary[],
-  onFound: (m: MediaSummary, path: string, index: number) => void,
-): Promise<void> {
-  const todo: number[] = [];
-  items.forEach((m, i) => {
-    if (m.id in store.paths) {
-      const path = store.paths[m.id];
-      if (path) onFound(m, path, i);
-    } else todo.push(i);
-  });
-  if (!todo.length) return;
+const inflight = new Map<number, Promise<string | null>>();
 
-  let next = 0;
-  const worker = async () => {
-    while (next < todo.length) {
-      const i = todo[next++];
-      try {
-        const path = await resolve(items[i]);
-        store.paths[items[i].id] = path;
-        if (path) onFound(items[i], path, i);
-      } catch {
-        // Falha de rede: não guarda, tenta de novo na próxima abertura.
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  saveStore();
+/**
+ * Confere um título no acervo. Chamadas repetidas reaproveitam o resultado.
+ * Falha de rede não é guardada: tenta de novo na próxima vez.
+ */
+export function checkNuvem(m: MediaSummary): Promise<string | null> {
+  const known = state[m.id];
+  if (known !== undefined) return Promise.resolve(known);
+  const pending = inflight.get(m.id);
+  if (pending) return pending;
+
+  const p = limit(() => resolve(m))
+    .then(
+      (path) => {
+        setState(m.id, path);
+        save();
+        return path;
+      },
+      () => null,
+    )
+    .finally(() => inflight.delete(m.id));
+  inflight.set(m.id, p);
+  return p;
 }

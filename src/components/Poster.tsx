@@ -1,5 +1,5 @@
-import { Star } from "lucide-solid";
-import { createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { FolderCheck, Star } from "lucide-solid";
+import { createResource, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { lookupMedia } from "../lib/anilist/api";
 import { label, mediaTitle, mediaYear } from "../lib/anilist/text";
 import type { MediaSummary, MediaType } from "../lib/anilist/types";
@@ -42,6 +42,19 @@ export function Cover(props: { media: MediaSummary | null | undefined; name: str
   );
 }
 
+/** Selo de "está no acervo", sobre a capa. */
+export function NuvemBadge() {
+  return (
+    <span
+      class="absolute top-2 left-2 z-10 grid size-7 place-items-center rounded-full bg-accent text-white shadow-lg ring-2 ring-black/40 shadow-black/40"
+      title="Disponível no acervo"
+    >
+      <FolderCheck class="size-3.5" aria-hidden="true" />
+      <span class="sr-only">Disponível no acervo</span>
+    </span>
+  );
+}
+
 /** Card de pôster. Com `media` usa direto; com `name`+`type` consulta o AniList ao aparecer na tela. */
 export function PosterCard(props: {
   name: string;
@@ -49,6 +62,10 @@ export function PosterCard(props: {
   media?: MediaSummary | null;
   onOpen: () => void;
   subtitle?: string;
+  /** Selo sobre a capa (ex.: `NuvemBadge`). */
+  badge?: JSX.Element;
+  /** Esmaece o card (ex.: título que não está no acervo). */
+  dimmed?: boolean;
 }) {
   let el!: HTMLButtonElement;
   const [visible, setVisible] = createSignal(false);
@@ -83,9 +100,13 @@ export function PosterCard(props: {
       type="button"
       onClick={props.onOpen}
       title={props.name}
-      class="group flex w-full flex-col gap-2 rounded-xl text-left outline-offset-4"
+      class={cx(
+        "group flex w-full flex-col gap-2 rounded-xl text-left outline-offset-4 transition-opacity duration-300",
+        props.dimmed && "opacity-55 hover:opacity-100",
+      )}
     >
       <div class="relative w-full transition duration-300 ease-expo group-hover:-translate-y-1 group-active:scale-[0.98]">
+        {props.badge}
         <Show when={!loading()} fallback={<div class="skeleton aspect-[2/3] rounded-xl" />}>
           <Cover media={media()} name={props.name} class="shadow-lg shadow-black/40 ring-1 ring-white/6" />
         </Show>

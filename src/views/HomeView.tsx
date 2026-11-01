@@ -1,14 +1,15 @@
 import { ChevronRight, LoaderCircle } from "lucide-solid";
-import { createEffect, createResource, createSignal, For, Show } from "solid-js";
-import { PosterCard } from "../components/Poster";
+import { createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { NuvemBadge, PosterCard } from "../components/Poster";
 import { sectionMeta, sectionOrder } from "../components/sections";
 import { cx, SectionTitle } from "../components/ui";
 import { anilist } from "../lib/anilist/api";
 import { mediaTitle } from "../lib/anilist/text";
 import type { MediaSummary } from "../lib/anilist/types";
 import { displayName, nuvem, sessionStore } from "../lib/anitsu";
-import { filterInNuvem } from "../lib/catalog";
+import { checkNuvem, nuvemPath } from "../lib/catalog";
 import { router } from "../lib/router";
+import { toast } from "../lib/toast";
 
 const SEASON_LABEL: Record<string, string> = { WINTER: "inverno", SPRING: "primavera", SUMMER: "verão", FALL: "outono" };
 
@@ -20,28 +21,65 @@ function currentSeason() {
   return { label: SEASON_LABEL[season], year: m === 12 ? d.getFullYear() + 1 : d.getFullYear() };
 }
 
-/** Animes da temporada que existem no acervo, na ordem de popularidade. */
-function useSeasonInNuvem() {
+/** Animes da temporada (AniList, uma requisição, com cache do lado Rust). */
+function useSeason() {
   const [season] = createResource(() => anilist.season().catch(() => [] as MediaSummary[]));
-  const [found, setFound] = createSignal<{ media: MediaSummary; path: string; index: number }[]>([]);
-  const [checking, setChecking] = createSignal(true);
+  const list = () => season() ?? [];
+  const checked = () => list().filter((m) => nuvemPath(m.id) !== undefined).length;
+  const inNuvem = () => list().filter((m) => nuvemPath(m.id)).length;
+  return { list, loading: () => season.loading, checked, inNuvem };
+}
 
-  createEffect(() => {
-    const list = season();
-    if (!list) return;
-    setFound([]);
-    setChecking(true);
-    void filterInNuvem(list, (media, path, index) =>
-      setFound((prev) => [...prev, { media, path, index }].sort((a, b) => a.index - b.index)),
-    ).finally(() => setChecking(false));
+/**
+ * Card da temporada. Só confere no acervo quando entra na tela (lazy),
+ * então abrir a Home não dispara uma checagem por anime de uma vez.
+ */
+function SeasonCard(props: { media: MediaSummary }) {
+  let el!: HTMLLIElement;
+  const [visible, setVisible] = createSignal(false);
+
+  onMount(() => {
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+    io.observe(el);
+    onCleanup(() => io.disconnect());
   });
 
-  return { found, checking: () => season.loading || checking(), total: () => season()?.length ?? 0 };
+  createEffect(() => {
+    if (visible()) void checkNuvem(props.media);
+  });
+
+  const path = () => nuvemPath(props.media.id);
+
+  async function open() {
+    const p = await checkNuvem(props.media);
+    if (p) router.go(p);
+    else toast.show(`"${mediaTitle(props.media)}" ainda não está na nuvem.`);
+  }
+
+  return (
+    <li ref={el}>
+      <PosterCard
+        name={mediaTitle(props.media)}
+        media={props.media}
+        onOpen={open}
+        dimmed={path() === null}
+        badge={path() ? <NuvemBadge /> : undefined}
+      />
+    </li>
+  );
 }
 
 export function HomeView() {
   const [root] = createResource(() => nuvem.list(""));
-  const season = useSeasonInNuvem();
+  const season = useSeason();
   const seasonInfo = currentSeason();
   const name = () => displayName(sessionStore.session()?.user);
   const sections = () =>
@@ -104,32 +142,23 @@ export function HomeView() {
         <SectionTitle
           id="season-h"
           aside={
-            <span class="flex items-center gap-2 text-xs text-faint" aria-live="polite">
-              <Show when={season.checking()}>
-                <LoaderCircle class="size-3.5 animate-spin" aria-hidden="true" />
-              </Show>
-              <Show when={season.checking()} fallback={`${season.found().length} de ${season.total()} no acervo`}>
-                Procurando no acervo
-              </Show>
-            </span>
+            <Show when={season.list().length}>
+              <span class="flex items-center gap-2 text-xs text-faint" aria-live="polite">
+                <Show when={season.checked() < season.list().length}>
+                  <LoaderCircle class="size-3.5 animate-spin" aria-hidden="true" />
+                </Show>
+                {season.inNuvem()} no acervo
+              </span>
+            </Show>
           }
         >
           Temporada de {seasonInfo.label} {seasonInfo.year}
         </SectionTitle>
         <Show
-          when={season.found().length || season.checking()}
-          fallback={<p class="text-sm text-muted">Nenhum anime desta temporada chegou ao acervo ainda.</p>}
-        >
-          <ul class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-7">
-            <For each={season.found()}>
-              {(f) => (
-                <li class="animate-fade-in">
-                  <PosterCard name={mediaTitle(f.media)} media={f.media} onOpen={() => router.go(f.path)} />
-                </li>
-              )}
-            </For>
-            <Show when={season.checking()}>
-              <For each={Array.from({ length: Math.max(0, 6 - season.found().length) })}>
+          when={!season.loading()}
+          fallback={
+            <ul class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-7">
+              <For each={[1, 2, 3, 4, 5, 6]}>
                 {() => (
                   <li>
                     <div class="skeleton aspect-[2/3] rounded-xl" />
@@ -137,8 +166,17 @@ export function HomeView() {
                   </li>
                 )}
               </For>
-            </Show>
-          </ul>
+            </ul>
+          }
+        >
+          <Show
+            when={season.list().length}
+            fallback={<p class="text-sm text-muted">Não foi possível carregar a temporada agora.</p>}
+          >
+            <ul class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-7">
+              <For each={season.list()}>{(m) => <SeasonCard media={m} />}</For>
+            </ul>
+          </Show>
         </Show>
       </section>
     </div>
