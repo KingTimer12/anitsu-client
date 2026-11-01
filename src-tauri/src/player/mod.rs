@@ -1,17 +1,24 @@
 //! Player de vídeo: proxy de stream local, AniSkip e estado persistido.
 
+pub mod aniskip;
 pub mod commands;
 pub mod proxy;
+pub mod store;
 
 use futures_util::{FutureExt, future::BoxFuture, stream};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_http::reqwest::{Method, header::RANGE};
+use tauri_plugin_http::reqwest::{Client, Method, header::RANGE};
 
-use crate::{auth::AuthManager, http::AnitsuApis};
+use crate::{anilist::cache::DiskCache, auth::AuthManager, http::AnitsuApis};
+use aniskip::SkipTimes;
+use store::PlayerStore;
 use proxy::{StreamProxy, Upstream, UpstreamResponse};
 
 pub struct PlayerState {
     pub proxy: StreamProxy,
+    pub store: PlayerStore,
+    pub aniskip: DiskCache<SkipTimes>,
+    pub http: Client,
 }
 
 /// Busca os bytes em `/api/preview` da nuvem, com a sessão do [`AuthManager`].
@@ -61,6 +68,14 @@ impl Upstream for NuvemUpstream {
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let upstream = NuvemUpstream { app: app.handle().clone() };
     let proxy = tauri::async_runtime::block_on(StreamProxy::start(upstream))?;
-    app.manage(PlayerState { proxy });
+    let dir = app.path().app_data_dir()?;
+    app.manage(PlayerState {
+        proxy,
+        store: PlayerStore::open(dir.join("player.json")),
+        aniskip: DiskCache::open(dir.join("aniskip.json"), aniskip::TTL_SECS),
+        http: Client::builder()
+            .user_agent(concat!("anitsu-client/", env!("CARGO_PKG_VERSION")))
+            .build()?,
+    });
     Ok(())
 }

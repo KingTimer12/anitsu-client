@@ -33,6 +33,11 @@ pub fn run() {
             anilist::commands::anilist_media,
             anilist::commands::anilist_season,
             player::commands::player_stream_url,
+            player::commands::player_data,
+            player::commands::player_save_progress,
+            player::commands::player_save_tracks,
+            player::commands::player_save_settings,
+            player::commands::player_aniskip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
