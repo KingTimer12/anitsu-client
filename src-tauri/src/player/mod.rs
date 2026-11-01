@@ -74,7 +74,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         store: PlayerStore::open(dir.join("player.json")),
         aniskip: DiskCache::open(dir.join("aniskip-v2.json"), aniskip::TTL_SECS),
         http: Client::builder()
-            .user_agent(concat!("anitsu-client/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("higanbana-client/", env!("CARGO_PKG_VERSION")))
             .build()?,
     });
     Ok(())

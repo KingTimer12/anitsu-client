@@ -98,7 +98,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("anitsu-player-test-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("higanbana-player-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("player.json")

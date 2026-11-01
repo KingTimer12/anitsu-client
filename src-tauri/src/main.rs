@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    anitsu_client_lib::run()
+    higanbana_client_lib::run()
 }

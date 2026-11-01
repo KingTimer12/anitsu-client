@@ -1,11 +1,11 @@
-# Anitsu Client
+# Higanbana Client
 
 Aplicativo desktop não oficial para navegar e baixar do acervo da [Anitsu](https://anitsu.moe/), com capa, sinopse, elenco e ficha técnica de cada título vindas do [AniList](https://anilist.co/).
 
 > [!IMPORTANT]
 > **Este projeto não tem nenhuma relação com a Anitsu.**
 >
-> - Usamos o acervo da Anitsu (`anitsu.moe` e `nuvem.anitsu.moe`), mas o Anitsu Client é independente: não é feito, mantido, apoiado nem endossado pela equipe da Anitsu.
+> - Usamos o acervo da Anitsu (`anitsu.moe` e `nuvem.anitsu.moe`), mas o Higanbana Client é independente: não é feito, mantido, apoiado nem endossado pela equipe da Anitsu.
 > - **Todo o conteúdo que existe na plataforma é crédito da comunidade** que o reúne, organiza e mantém. Nenhum arquivo é hospedado, armazenado ou redistribuído por este projeto.
 > - A finalidade do aplicativo é apenas **facilitar** o acesso ao acervo para quem já tem conta: navegar, buscar e baixar com uma interface mais confortável.
 > - Os dados de capa, sinopse, elenco e equipe vêm da API pública do AniList, que também não tem relação com este projeto.

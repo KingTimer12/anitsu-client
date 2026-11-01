@@ -16,7 +16,7 @@ import { folderTitle } from "./library";
 const ROOT = "Animes";
 const CONCURRENCY = 2;
 const TTL_MS = 12 * 60 * 60 * 1000;
-const STORE_KEY = "anitsu:catalog:v1";
+const STORE_KEY = "higanbana:catalog:v1";
 
 /** Só letras/números, minúsculo, sem acento. */
 const norm = (s: string) =>

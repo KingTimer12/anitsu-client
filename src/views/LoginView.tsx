@@ -58,7 +58,7 @@ export function LoginView() {
 
         <main class="relative z-10 flex h-full items-center px-[clamp(32px,8vw,120px)]">
           <div class="w-full max-w-md animate-fade-up">
-            <h1 class="font-display text-7xl font-bold tracking-tighter text-brand">anitsu</h1>
+            <h1 class="font-display text-7xl font-bold tracking-tighter text-brand">higanbana</h1>
             <p class="mt-4 max-w-[36ch] text-lg text-muted">
               A nuvem de animes da Anitsu, com capa, sinopse e ficha técnica de cada título.
             </p>

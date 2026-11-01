@@ -23,7 +23,7 @@ impl AniListClient {
     pub fn new() -> Self {
         Self {
             http: Client::builder()
-                .user_agent(concat!("anitsu-client/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("higanbana-client/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("falha ao criar cliente HTTP"),
             blocked_until: Mutex::new(None),
