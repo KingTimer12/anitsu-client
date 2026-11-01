@@ -95,7 +95,8 @@
     height: 100%;
   }
   body {
-    @apply overflow-hidden bg-canvas font-sans text-[15px] leading-relaxed text-fg antialiased;
+    /* Transparente: o mpv desenha atrás do webview. Cada tela pinta o próprio fundo. */
+    @apply overflow-hidden bg-transparent font-sans text-[15px] leading-relaxed text-fg antialiased;
     /* App desktop: texto selecionável só onde faz sentido (select-text). */
     user-select: none;
   }

@@ -28,6 +28,7 @@ tauri-plugin-http = { version = "2.8.3", features = ["json", "gzip", "brotli"] }
 thiserror = "2"
 sha2 = "0.10"
 getrandom = "0.3"
+tauri-plugin-libmpv = "0.3.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -18,7 +18,8 @@
     "@tauri-apps/plugin-http": "^2.8.3",
     "@tauri-apps/plugin-opener": "^2",
     "lucide-solid": "^1.66.0",
-    "solid-js": "^1.9.3"
+    "solid-js": "^1.9.3",
+    "tauri-plugin-libmpv-api": "^0.3.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
