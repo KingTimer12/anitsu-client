@@ -7,7 +7,7 @@ import { cx, IconButton } from "./ui";
 const appWindow = getCurrentWindow();
 
 /** Botões de janela no padrão do Windows 11 (fechar fica vermelho no hover). */
-function WindowControls() {
+export function WindowControls() {
   const [maximized, setMaximized] = createSignal(false);
 
   onMount(() => {

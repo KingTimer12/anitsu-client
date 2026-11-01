@@ -6,12 +6,15 @@ import { TitleBar } from "./components/TitleBar";
 import { Toaster } from "./components/Toaster";
 import { sessionStore } from "./lib/anitsu";
 import { classify, type Place } from "./lib/library";
+import { cx } from "./components/ui";
 import { router } from "./lib/router";
 import { FolderView } from "./views/FolderView";
 import { HomeView } from "./views/HomeView";
 import { LoginView } from "./views/LoginView";
 import { ShelfView } from "./views/ShelfView";
 import { TitleView } from "./views/TitleView";
+import { PlayerView } from "./views/PlayerView";
+import { player } from "./lib/player/session";
 
 const only =
   <K extends Place["kind"]>(kind: K) =>
@@ -25,7 +28,8 @@ function App() {
   return (
     <Show when={ready()} fallback={<div class="h-full bg-bg" />}>
       <Show when={session()} fallback={<LoginView />}>
-        <div class="flex h-full flex-col bg-bg">
+        {/* Com o player aberto, o app fica invisível (sem desmontar, para manter o scroll) e o vídeo aparece. */}
+        <div class={cx("flex h-full flex-col bg-bg", player.current() && "invisible")}>
           <a
             href="#conteudo"
             class="sr-only focus:not-sr-only focus:absolute focus:top-14 focus:left-4 focus:z-50 focus:rounded-lg focus:bg-elevated focus:px-3 focus:py-2"
@@ -54,6 +58,7 @@ function App() {
           </div>
           <Toaster />
         </div>
+        <Show when={player.current()}>{(t) => <PlayerView target={t()} onClose={player.close} />}</Show>
       </Show>
     </Show>
   );

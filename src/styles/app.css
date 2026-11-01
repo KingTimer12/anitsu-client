@@ -95,7 +95,8 @@
     height: 100%;
   }
   body {
-    @apply overflow-hidden bg-canvas font-sans text-[15px] leading-relaxed text-fg antialiased;
+    /* Transparente: o mpv desenha atrás do webview. Cada tela pinta o próprio fundo. */
+    @apply overflow-hidden bg-transparent font-sans text-[15px] leading-relaxed text-fg antialiased;
     /* App desktop: texto selecionável só onde faz sentido (select-text). */
     user-select: none;
   }
@@ -164,4 +165,20 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Volume do player: trilha fina com preenchimento em accent. */
+.volume-range {
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--accent) var(--vol, 100%), rgb(255 255 255 / 0.2) var(--vol, 100%));
+  cursor: pointer;
+}
+.volume-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #fff;
 }

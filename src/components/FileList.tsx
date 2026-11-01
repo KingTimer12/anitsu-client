@@ -1,10 +1,12 @@
-import { Check, Download, FileVideo, Folder, RefreshCw } from "lucide-solid";
+import { Check, Download, FileVideo, Folder, Play, RefreshCw } from "lucide-solid";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { FileEntry } from "../lib/anitsu";
 import { joinPath } from "../lib/anitsu";
 import { downloads, progressOf } from "../lib/downloads";
 import { formatBytes } from "../lib/format";
 import { parseEpisode } from "../lib/library";
+import { VIDEO_EXT } from "../lib/player/logic";
+import { playerStore } from "../lib/player/store";
 import { cx, ProgressRing } from "./ui";
 
 export function DownloadButton(props: { path: string; name: string }) {
@@ -58,7 +60,13 @@ export const filePaths = (dir: string, files: FileEntry[]) =>
  * Lista de uma pasta: subpastas primeiro, depois arquivos como episódios
  * (número grande quando o nome segue o padrão `Ep. 01`).
  */
-export function FileList(props: { dir: string; files: FileEntry[]; onOpenFolder: (path: string) => void }) {
+export function FileList(props: {
+  dir: string;
+  files: FileEntry[];
+  onOpenFolder: (path: string) => void;
+  /** Mostra "Assistir" nos vídeos. */
+  onPlay?: (file: FileEntry) => void;
+}) {
   const sorted = createMemo(() =>
     [...props.files].sort(
       (a, b) =>
@@ -109,6 +117,8 @@ export function FileList(props: { dir: string; files: FileEntry[]; onOpenFolder:
             }
             const ep = parseEpisode(f.name);
             const label = !ep.number ? f.name : sharedQuality() ? `Episódio ${Number(ep.number)}` : (ep.quality ?? ep.label);
+            const playable = !!props.onPlay && VIDEO_EXT.has((f.extension ?? "").toLowerCase());
+            const progress = () => playerStore.progress(path);
             return (
               <li class="flex items-center gap-4 px-4 py-3 transition-colors hover:bg-white/4" title={f.name}>
                 <span
@@ -121,11 +131,35 @@ export function FileList(props: { dir: string; files: FileEntry[]; onOpenFolder:
                 </span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate font-medium">{label}</span>
-                  <span class="flex gap-3 text-xs text-faint tabular-nums">
+                  <span class="flex items-center gap-3 text-xs text-faint tabular-nums">
                     <span>{f.extension?.replace(".", "").toUpperCase()}</span>
                     <span>{formatBytes(f.size)}</span>
+                    <Show when={progress()?.watched}>
+                      <span class="inline-flex items-center gap-1 text-ok">
+                        <Check class="size-3.5" aria-hidden="true" /> Visto
+                      </span>
+                    </Show>
                   </span>
+                  <Show when={progress() && !progress()!.watched}>
+                    <span class="mt-1.5 block h-0.5 max-w-48 overflow-hidden rounded-full bg-white/10" aria-hidden="true">
+                      <span
+                        class="block h-full bg-accent"
+                        style={{ width: `${Math.min(100, (progress()!.position / progress()!.duration) * 100)}%` }}
+                      />
+                    </span>
+                  </Show>
                 </span>
+                <Show when={playable}>
+                  <button
+                    type="button"
+                    onClick={() => props.onPlay!(f)}
+                    aria-label={`Assistir ${label}`}
+                    class="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-semibold text-white transition duration-150 hover:brightness-110 active:scale-95"
+                  >
+                    <Play class="size-4" fill="currentColor" stroke-width={0} aria-hidden="true" />
+                    Assistir
+                  </button>
+                </Show>
                 <DownloadButton path={path} name={label} />
               </li>
             );

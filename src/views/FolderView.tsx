@@ -6,6 +6,7 @@ import { cx } from "../components/ui";
 import { AnitsuError, joinPath, nuvem } from "../lib/anitsu";
 import { splitPath } from "../lib/library";
 import { router } from "../lib/router";
+import { player } from "../lib/player/session";
 
 /** Pasta comum. Se só tiver pastas de nome curto (ex.: `Letra A`, `0-9`), vira índice em blocos. */
 export function FolderView(props: { path: string }) {
@@ -28,7 +29,24 @@ export function FolderView(props: { path: string }) {
         <p class="text-danger">{AnitsuError.from(listing.error).message}</p>
       </Show>
       <Show when={listing()} fallback={<div class="skeleton h-72 rounded-2xl" />}>
-        <Show when={tiles()} fallback={<FileList dir={props.path} files={listing()!.files} onOpenFolder={router.go} />}>
+        <Show when={tiles()} fallback={
+            <FileList
+              dir={props.path}
+              files={listing()!.files}
+              onOpenFolder={router.go}
+              onPlay={(file) =>
+                player.open({
+                  dir: props.path,
+                  file,
+                  files: listing()!.files,
+                  titlePath: props.path,
+                  malId: null,
+                  isAnime: false,
+                  animeTitle: segs().at(-2) && /^(temporada|season|\[|\()/i.test(segs().at(-1)!) ? segs().at(-2)! : segs().at(-1)!,
+                })
+              }
+            />
+          }>
           <ul class="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3">
             <For each={tiles()}>
               {(name) => (

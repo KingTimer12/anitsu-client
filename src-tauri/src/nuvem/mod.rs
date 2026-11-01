@@ -7,7 +7,7 @@
 //! - `GET /download?path=<file>`→ arquivo inteiro (stream)
 
 pub mod commands;
-mod download;
+pub(crate) mod download;
 
 use serde::{Deserialize, Serialize};
 

@@ -69,18 +69,32 @@ impl AnitsuHttp {
     where
         F: Fn(RequestBuilder) -> RequestBuilder,
     {
-        let url = self.url(path)?;
-        let mut resp = self.attempt(auth, &method, &url, &build).await?;
-
-        if resp.status() == StatusCode::UNAUTHORIZED && auth.is_logged_in().await {
-            auth.refresh().await?;
-            resp = self.attempt(auth, &method, &url, &build).await?;
-        }
-
+        let resp = self.send_raw(auth, method, path, build).await?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(HttpError::Status { status: status.as_u16(), body });
+        }
+        Ok(resp)
+    }
+
+    /// Como [`Self::send`] (inclusive renovar a sessão em 401), mas devolve a resposta
+    /// com qualquer status, para quem precisa repassá-lo (ex.: proxy de stream: 206/416/404).
+    pub async fn send_raw<F>(
+        &self,
+        auth: &AuthManager,
+        method: Method,
+        path: &str,
+        build: F,
+    ) -> HttpResult<Response>
+    where
+        F: Fn(RequestBuilder) -> RequestBuilder,
+    {
+        let url = self.url(path)?;
+        let mut resp = self.attempt(auth, &method, &url, &build).await?;
+        if resp.status() == StatusCode::UNAUTHORIZED && auth.is_logged_in().await {
+            auth.refresh().await?;
+            resp = self.attempt(auth, &method, &url, &build).await?;
         }
         Ok(resp)
     }
