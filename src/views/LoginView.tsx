@@ -15,7 +15,7 @@ function DiscordMark(props: { class?: string }) {
 }
 
 export function LoginView() {
-  const [trending] = createResource(() => anilist.trending().catch(() => []));
+  const [season] = createResource(() => anilist.season().catch(() => []));
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
 
@@ -32,13 +32,13 @@ export function LoginView() {
     }
   }
 
-  const covers = () => (trending() ?? []).filter((m) => m.coverImage?.large).slice(0, 30);
+  const covers = () => (season() ?? []).filter((m) => m.coverImage?.large).slice(0, 30);
 
   return (
     <div class="flex h-full flex-col bg-bg">
       <TitleBar />
       <div class="relative flex-1 overflow-hidden">
-        {/* Parede de capas em alta, inclinada. */}
+        {/* Parede de capas da temporada, inclinada. */}
         <div aria-hidden="true" class="absolute -inset-y-1/4 right-[-10%] left-[38%] grid -rotate-[8deg] grid-cols-5 gap-4 opacity-60">
           <For each={covers()}>
             {(m, i) => (
