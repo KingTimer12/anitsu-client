@@ -25,6 +25,17 @@ Aplicativo desktop não oficial para navegar e baixar do acervo da [Anitsu](http
 
 ## Como rodar
 
+### Chave do Supabase
+
+O app precisa da chave `anon` pública que o próprio site da Anitsu usa no login. Por respeito aos desenvolvedores da Anitsu, ela **não fica neste repositório**: cada pessoa configura a sua localmente.
+
+1. Copie `.env.example` para `.env` na raiz do projeto (o `.env` está no `.gitignore`).
+2. Preencha `ANITSU_SUPABASE_ANON_KEY` com a chave. Também pode ser uma variável de ambiente com o mesmo nome.
+
+No build, a chave é embutida no executável mascarada, sem aparecer em texto puro. Sem ela, o build para com uma mensagem explicando o que falta.
+
+### Comandos
+
 ```sh
 bun install
 bun tauri dev      # abre o app em modo de desenvolvimento
