@@ -3,6 +3,7 @@ mod auth;
 mod http;
 mod nuvem;
 mod player;
+mod music;
 mod reader;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -12,12 +13,14 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_libmpv::init())
         .register_asynchronous_uri_scheme_protocol("manga", reader::handle_protocol)
+        .register_asynchronous_uri_scheme_protocol("nuvemimg", music::image::handle_protocol)
         .setup(|app| {
             auth::setup(app)?;
             http::setup(app)?;
             anilist::setup(app)?;
             player::setup(app)?;
             reader::setup(app)?;
+            music::setup(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -42,6 +45,12 @@ pub fn run() {
             player::commands::player_save_settings,
             player::commands::player_aniskip,
             reader::commands::reader_open,
+            music::commands::music_play,
+            music::commands::music_command,
+            music::commands::music_seek,
+            music::commands::music_jump,
+            music::commands::music_set,
+            music::commands::music_meta,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

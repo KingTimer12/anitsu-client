@@ -6,6 +6,8 @@ import { playerStore } from "../lib/player/store";
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, Show, Switch, type JSX } from "solid-js";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { filePaths, FileList } from "../components/FileList";
+import { createAlbum, looksLikeAlbum } from "../lib/music/album";
+import { AlbumView } from "./AlbumView";
 import { Portrait } from "../components/Portrait";
 import { Cover } from "../components/Poster";
 import { Button, cx } from "../components/ui";
@@ -108,6 +110,12 @@ export function TitleView(props: Props) {
     const ep = n !== null ? `ep. ${n}` : "";
     return r.at > 0 ? `Continuar ${ep} (${formatTime(r.at)})`.replace("  ", " ") : `Assistir ${ep}`.trim();
   };
+
+  // --- Músicas: pasta com faixas vira encarte ---
+  const [album] = createAlbum(() => {
+    const l = filesListing();
+    return l && looksLikeAlbum(l.files) ? { path: filesPath(), files: l.files } : undefined;
+  });
 
   // --- Ler / continuar (mangás) ---
   const comics = () => (filesListing() ? comicFiles(filesListing()!.files) : []);
@@ -368,7 +376,14 @@ export function TitleView(props: Props) {
                   <p class="text-danger">{AnitsuError.from(filesListing.error).message}</p>
                 </Show>
                 <Show when={filesListing()} fallback={<div class="skeleton h-80 rounded-2xl" />}>
-                  <FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} onPlay={play} onRead={read} />
+                  <Show
+                    when={looksLikeAlbum(filesListing()!.files) && !(album.state === "ready" && !album()) && !album.error}
+                    fallback={<FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} onPlay={play} onRead={read} />}
+                  >
+                    <Show when={album()} fallback={<div class="skeleton h-80 rounded-2xl" />}>
+                      {(d) => <AlbumView data={d()} work={heading()} />}
+                    </Show>
+                  </Show>
                 </Show>
               </div>
             </Match>

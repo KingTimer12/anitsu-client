@@ -37,6 +37,11 @@ futures-util = "0.3"
 urlencoding = "2"
 flate2 = "1"
 unrar = "0.5.8"
+symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
+rubato = "0.16"
+ebur128 = "0.1"
+cpal = "0.15"
+souvlaki = "0.8"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

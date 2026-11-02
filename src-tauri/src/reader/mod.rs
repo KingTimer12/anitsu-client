@@ -64,7 +64,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Bytes `[start, end]` (inclusivo) de um arquivo da nuvem.
-async fn fetch_range(app: &AppHandle, path: &str, start: u64, end: u64) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_range(app: &AppHandle, path: &str, start: u64, end: u64) -> Result<Vec<u8>, String> {
     let apis = app.state::<AnitsuApis>();
     let auth = app.state::<AuthManager>();
     let resp = apis

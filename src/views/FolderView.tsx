@@ -8,12 +8,22 @@ import { splitPath } from "../lib/library";
 import { router } from "../lib/router";
 import { player } from "../lib/player/session";
 import { reader } from "../lib/reader/session";
+import { createAlbum, looksLikeAlbum } from "../lib/music/album";
+import { AlbumView } from "./AlbumView";
 
 /** Pasta comum. Se só tiver pastas de nome curto (ex.: `Letra A`, `0-9`), vira índice em blocos. */
 export function FolderView(props: { path: string }) {
   const [listing] = createResource(() => props.path, nuvem.list);
   const segs = () => splitPath(props.path);
   const title = () => (segs().length === 1 ? sectionMeta(segs()[0]).label : (segs().at(-1) ?? ""));
+
+  // Pasta com músicas vira encarte (os discos e a arte são listados um por vez).
+  const [album] = createAlbum(() => {
+    const l = listing();
+    return l && looksLikeAlbum(l.files) ? { path: props.path, files: l.files } : undefined;
+  });
+  /** Encarte enquanto carrega ou se deu certo; se não era álbum (ou falhou), volta à lista. */
+  const isAlbum = () => !!listing() && looksLikeAlbum(listing()!.files) && !(album.state === "ready" && !album()) && !album.error;
 
   const tiles = createMemo(() => {
     const files = listing()?.files ?? [];
@@ -25,11 +35,20 @@ export function FolderView(props: { path: string }) {
   return (
     <div class="mx-auto max-w-7xl px-8 py-6">
       <Breadcrumbs path={props.path} />
-      <h1 class="mt-5 mb-8 font-display text-4xl font-semibold tracking-tight">{title()}</h1>
+      <Show when={!isAlbum()}>
+        <h1 class="mt-5 mb-8 font-display text-4xl font-semibold tracking-tight">{title()}</h1>
+      </Show>
       <Show when={listing.error}>
         <p class="text-danger">{AnitsuError.from(listing.error).message}</p>
       </Show>
-      <Show when={listing()} fallback={<div class="skeleton h-72 rounded-2xl" />}>
+      <Show when={isAlbum()}>
+        <div class="mt-6">
+          <Show when={album()} fallback={<div class="skeleton h-96 rounded-2xl" />}>
+            {(d) => <AlbumView data={d()} work={segs().at(-2)} />}
+          </Show>
+        </div>
+      </Show>
+      <Show when={listing() && !isAlbum()} fallback={<Show when={!listing() && !listing.error}><div class="skeleton h-72 rounded-2xl" /></Show>}>
         <Show when={tiles()} fallback={
             <FileList
               dir={props.path}
