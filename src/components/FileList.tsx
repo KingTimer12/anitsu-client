@@ -1,4 +1,4 @@
-import { Check, Download, FileVideo, Folder, Play, RefreshCw } from "lucide-solid";
+import { BookOpen, Check, Download, FileVideo, Folder, Play, RefreshCw } from "lucide-solid";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { FileEntry } from "../lib/anitsu";
 import { joinPath } from "../lib/anitsu";
@@ -7,6 +7,8 @@ import { formatBytes } from "../lib/format";
 import { parseEpisode } from "../lib/library";
 import { VIDEO_EXT } from "../lib/player/logic";
 import { playerStore } from "../lib/player/store";
+import { isComic } from "../lib/reader/logic";
+import { readerStore } from "../lib/reader/store";
 import { cx, ProgressRing } from "./ui";
 
 export function DownloadButton(props: { path: string; name: string }) {
@@ -66,6 +68,8 @@ export function FileList(props: {
   onOpenFolder: (path: string) => void;
   /** Mostra "Assistir" nos vídeos. */
   onPlay?: (file: FileEntry) => void;
+  /** Mostra "Ler" nos `.cbz`/`.zip`. */
+  onRead?: (file: FileEntry) => void;
 }) {
   const sorted = createMemo(() =>
     [...props.files].sort(
@@ -118,7 +122,13 @@ export function FileList(props: {
             const ep = parseEpisode(f.name);
             const label = !ep.number ? f.name : sharedQuality() ? `Episódio ${Number(ep.number)}` : (ep.quality ?? ep.label);
             const playable = !!props.onPlay && VIDEO_EXT.has((f.extension ?? "").toLowerCase());
-            const progress = () => playerStore.progress(path);
+            const readable = !!props.onRead && isComic(f);
+            const reading = () => (readable ? readerStore.progress(path) : undefined);
+            const progress = () => {
+              const r = reading();
+              if (r) return { watched: r.read, position: r.page + 1, duration: r.total };
+              return playerStore.progress(path);
+            };
             return (
               <li class="flex items-center gap-4 px-4 py-3 transition-colors hover:bg-white/4" title={f.name}>
                 <span
@@ -136,7 +146,7 @@ export function FileList(props: {
                     <span>{formatBytes(f.size)}</span>
                     <Show when={progress()?.watched}>
                       <span class="inline-flex items-center gap-1 text-ok">
-                        <Check class="size-3.5" aria-hidden="true" /> Visto
+                        <Check class="size-3.5" aria-hidden="true" /> {readable ? "Lido" : "Visto"}
                       </span>
                     </Show>
                   </span>
@@ -158,6 +168,17 @@ export function FileList(props: {
                   >
                     <Play class="size-4" fill="currentColor" stroke-width={0} aria-hidden="true" />
                     Assistir
+                  </button>
+                </Show>
+                <Show when={readable}>
+                  <button
+                    type="button"
+                    onClick={() => props.onRead!(f)}
+                    aria-label={`Ler ${label}`}
+                    class="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-semibold text-white transition duration-150 hover:brightness-110 active:scale-95"
+                  >
+                    <BookOpen class="size-4" aria-hidden="true" />
+                    {reading() && !reading()!.read ? "Continuar" : "Ler"}
                   </button>
                 </Show>
                 <DownloadButton path={path} name={label} />

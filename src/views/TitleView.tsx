@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Download, ExternalLink, Play, Star } from "lucide-solid";
+import { BookOpen, Download, ExternalLink, Play, Star } from "lucide-solid";
 import { formatTime, videoFiles } from "../lib/player/logic";
 import { player } from "../lib/player/session";
 import { playerStore } from "../lib/player/store";
@@ -19,6 +19,9 @@ import { formatNumber } from "../lib/format";
 import { folderTitle, folderYear, releaseTags, splitPath } from "../lib/library";
 import { episodeNumber as parseEpisodeNumber } from "../lib/player/logic";
 import { router } from "../lib/router";
+import { chapterLabel, comicFiles, labelText } from "../lib/reader/logic";
+import { reader } from "../lib/reader/session";
+import { readerStore } from "../lib/reader/store";
 
 interface Props {
   titlePath: string;
@@ -104,6 +107,32 @@ export function TitleView(props: Props) {
     const n = parseEpisodeNumber(r.file.name);
     const ep = n !== null ? `ep. ${n}` : "";
     return r.at > 0 ? `Continuar ${ep} (${formatTime(r.at)})`.replace("  ", " ") : `Assistir ${ep}`.trim();
+  };
+
+  // --- Ler / continuar (mangás) ---
+  const comics = () => (filesListing() ? comicFiles(filesListing()!.files) : []);
+  function read(file: FileEntry) {
+    reader.open({ dir: filesPath(), file, files: filesListing()!.files, titlePath: props.titlePath, title: heading() });
+  }
+  /** Último arquivo lido desta pasta: continua nele ou vai para o seguinte. */
+  const resumeRead = createMemo(() => {
+    const list = comics();
+    let best: { i: number; page: number; read: boolean; when: number; unitName?: string } | null = null;
+    list.forEach((f, i) => {
+      const p = readerStore.progress(joinPath(filesPath(), f.name));
+      if (p && (!best || p.updatedAt >= best.when))
+        best = { i, page: p.page, read: p.read, when: p.updatedAt, unitName: p.unitName };
+    });
+    const b = best as { i: number; page: number; read: boolean; unitName?: string } | null;
+    if (!b) return list[0] ? { file: list[0], page: 0, resume: false } : null;
+    if (!b.read) return { file: list[b.i], page: b.page, resume: true, unitName: b.unitName };
+    return list[b.i + 1] ? { file: list[b.i + 1], page: 0, resume: false } : null;
+  });
+  const readLabel = (r: { file: FileEntry; page: number; resume: boolean; unitName?: string }) => {
+    // Coletânea: o progresso guarda o capítulo interno, não a página.
+    if (r.resume && r.unitName) return `Continuar ${labelText(chapterLabel(r.unitName))}`;
+    const l = labelText(chapterLabel(r.file.name));
+    return r.resume ? `Continuar ${l} (pág. ${r.page + 1})` : `Ler ${l}`;
   };
 
   // --- AniList ---
@@ -240,8 +269,16 @@ export function TitleView(props: Props) {
                   </Button>
                 )}
               </Show>
+              <Show when={resumeRead()}>
+                {(r) => (
+                  <Button variant="primary" onClick={() => read(r().file)}>
+                    <BookOpen class="size-4" aria-hidden="true" />
+                    {readLabel(r())}
+                  </Button>
+                )}
+              </Show>
               <Button
-                variant={videos().length ? "secondary" : "primary"}
+                variant={videos().length || comics().length ? "secondary" : "primary"}
                 disabled={!remaining().length}
                 onClick={() => downloads.startAll(remaining())}
               >
@@ -331,7 +368,7 @@ export function TitleView(props: Props) {
                   <p class="text-danger">{AnitsuError.from(filesListing.error).message}</p>
                 </Show>
                 <Show when={filesListing()} fallback={<div class="skeleton h-80 rounded-2xl" />}>
-                  <FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} onPlay={play} />
+                  <FileList dir={filesPath()} files={filesListing()!.files} onOpenFolder={router.go} onPlay={play} onRead={read} />
                 </Show>
               </div>
             </Match>
