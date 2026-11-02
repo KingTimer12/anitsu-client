@@ -17,6 +17,8 @@ import { PlayerView } from "./views/PlayerView";
 import { player } from "./lib/player/session";
 import { ReaderView } from "./views/ReaderView";
 import { reader } from "./lib/reader/session";
+import { MusicBar } from "./components/music/MusicBar";
+import { music } from "./lib/music/session";
 
 const only =
   <K extends Place["kind"]>(kind: K) =>
@@ -58,6 +60,9 @@ function App() {
               </Switch>
             </main>
           </div>
+          <Show when={music.state()?.album}>
+            <MusicBar />
+          </Show>
           <Toaster />
         </div>
         <Show when={player.current()}>{(t) => <PlayerView target={t()} onClose={player.close} />}</Show>
