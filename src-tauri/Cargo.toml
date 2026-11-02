@@ -35,6 +35,8 @@ http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"
 urlencoding = "2"
+flate2 = "1"
+unrar = "0.5.8"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

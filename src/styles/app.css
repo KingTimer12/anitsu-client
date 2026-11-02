@@ -28,6 +28,8 @@
 
   --font-display: "Outfit Variable", "Segoe UI", system-ui, sans-serif;
   --font-sans: "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  /* Só no leitor: números e título com cara de mangá impresso. */
+  --font-mincho: "Zen Old Mincho", "Yu Mincho", serif;
 
   --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
 

@@ -15,6 +15,8 @@ import { ShelfView } from "./views/ShelfView";
 import { TitleView } from "./views/TitleView";
 import { PlayerView } from "./views/PlayerView";
 import { player } from "./lib/player/session";
+import { ReaderView } from "./views/ReaderView";
+import { reader } from "./lib/reader/session";
 
 const only =
   <K extends Place["kind"]>(kind: K) =>
@@ -29,7 +31,7 @@ function App() {
     <Show when={ready()} fallback={<div class="h-full bg-bg" />}>
       <Show when={session()} fallback={<LoginView />}>
         {/* Com o player aberto, o app fica invisível (sem desmontar, para manter o scroll) e o vídeo aparece. */}
-        <div class={cx("flex h-full flex-col bg-bg", player.current() && "invisible")}>
+        <div class={cx("flex h-full flex-col bg-bg", (player.current() || reader.current()) && "invisible")}>
           <a
             href="#conteudo"
             class="sr-only focus:not-sr-only focus:absolute focus:top-14 focus:left-4 focus:z-50 focus:rounded-lg focus:bg-elevated focus:px-3 focus:py-2"
@@ -59,6 +61,9 @@ function App() {
           <Toaster />
         </div>
         <Show when={player.current()}>{(t) => <PlayerView target={t()} onClose={player.close} />}</Show>
+        <Show when={reader.current()} keyed>
+          {(t) => <ReaderView target={t} onClose={reader.close} />}
+        </Show>
       </Show>
     </Show>
   );

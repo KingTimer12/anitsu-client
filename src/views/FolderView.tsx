@@ -7,6 +7,7 @@ import { AnitsuError, joinPath, nuvem } from "../lib/anitsu";
 import { splitPath } from "../lib/library";
 import { router } from "../lib/router";
 import { player } from "../lib/player/session";
+import { reader } from "../lib/reader/session";
 
 /** Pasta comum. Se só tiver pastas de nome curto (ex.: `Letra A`, `0-9`), vira índice em blocos. */
 export function FolderView(props: { path: string }) {
@@ -34,6 +35,9 @@ export function FolderView(props: { path: string }) {
               dir={props.path}
               files={listing()!.files}
               onOpenFolder={router.go}
+              onRead={(file) =>
+                reader.open({ dir: props.path, file, files: listing()!.files, titlePath: props.path, title: segs().at(-1) ?? "" })
+              }
               onPlay={(file) =>
                 player.open({
                   dir: props.path,
