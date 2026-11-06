@@ -1,13 +1,18 @@
 //! Início: saudação, seções do acervo e a temporada atual do AniList.
 
-use gpui::{Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px};
+use gpui_kit::{
+    Context, ElementId, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Window, assets::IconName, div,
+    prelude::*, px,
+};
+use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use higanbana_core::anilist::{season_at, types::MediaSummary};
 
 use crate::{
-    components::{columns, content_width, poster, section_meta, section_order, section_title, skeleton, when_visible, PosterProps},
+    chrome::loading,
+    components::{columns, content_width, poster, section_label, section_meta, section_order, section_title, when_visible, PosterProps},
     state::{AppState, Tone, state},
-    theme,
-    ui::{icon, spinner},
+    ui::empty_state,
 };
 
 pub struct HomeView {
@@ -63,7 +68,7 @@ impl HomeView {
         let task = core.clone().spawn(async move { core.check_catalog(&media).await });
         cx.spawn(async move |_, cx| {
             let path = task.await.ok().flatten();
-            let _ = state.update(cx, |s, cx| match path {
+            state.update(cx, |s, cx| match path {
                 Some(p) => s.go(p, cx),
                 None => s.toast(format!("\"{}\" ainda não está na nuvem.", m.title()), Tone::Info, cx),
             });
@@ -83,72 +88,72 @@ fn season_label(code: &str) -> &'static str {
 
 impl Render for HomeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = content_width(window, 1280.);
+        let theme = cx.theme().clone();
+        let rem = f32::from(window.rem_size());
+        let width = content_width(window, 80. * rem);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let (season_code, year) = season_at(now);
         let name = self.state.read(cx).user.as_ref().map(|u| u.name.clone());
 
         // --- Seções ---
-        let sec_cols = columns(width, 240., 12.);
+        let gap = 0.75 * rem;
+        let sec_cols = columns(width, 15. * rem, gap) as u16;
         let sections = match &self.sections {
-            None => div().grid().grid_cols(sec_cols as u16).gap_3().children((0..6).map(|_| skeleton().h(px(112.)).rounded_2xl())),
-            Some(Err(_)) => div().text_color(theme::danger()).child("Não foi possível abrir a nuvem. Verifique sua conexão e reabra o app."),
-            Some(Ok(list)) => div().grid().grid_cols(sec_cols as u16).gap_3().children(list.iter().enumerate().map(|(i, s)| {
-                let (icon_name, blurb, tint) = section_meta(s);
-                let label = crate::components::section_label(s);
+            None => div().grid().grid_cols(sec_cols).gap_3().children((0..6).map(|_| Skeleton::new().h_20().rounded(theme.radius_lg))),
+            Some(Err(_)) => empty_state(IconName::WifiOff, "Não foi possível abrir a nuvem", Some("Verifique sua conexão e reabra o app.".into()), cx),
+            Some(Ok(list)) => div().grid().grid_cols(sec_cols).gap_3().children(list.iter().map(|s| {
+                let (icon_name, blurb) = section_meta(s);
                 let target = s.clone();
                 let state = self.state.clone();
-                div()
-                    .id(SharedString::from(format!("section-{i}")))
-                    .flex()
-                    .items_center()
+                h_flex()
+                    .id(ElementId::Name(format!("section:{s}").into()))
                     .gap_4()
-                    .h(px(112.))
-                    .p_5()
-                    .rounded_2xl()
+                    .h_20()
+                    .px_4()
+                    .rounded(theme.radius_lg)
                     .border_1()
-                    .border_color(theme::line())
-                    .bg(gpui::Rgba { a: 0.7, ..theme::surface() })
-                    .cursor_pointer()
-                    .hover(|d| d.border_color(theme::line_strong()).bg(theme::elevated()))
+                    .border_color(theme.border)
+                    .bg(theme.group_box)
+                    .hover(|d| d.bg(theme.secondary_hover))
                     .child(
                         div()
-                            .size_12()
+                            .size_10()
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded_xl()
-                            .bg(gpui::Rgba { a: 0.12, ..tint })
-                            .child(icon(icon_name).size_6().text_color(tint)),
+                            .rounded(theme.radius)
+                            .bg(theme.muted)
+                            .child(Icon::new(icon_name).text_color(theme.foreground)),
                     )
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(label))
-                            .child(div().text_sm().text_color(theme::muted()).line_clamp(2).child(blurb)),
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(section_label(s)))
+                            .child(div().text_sm().text_color(theme.muted_foreground).line_clamp(1).child(blurb)),
                     )
-                    .child(icon("chevron-right").text_color(theme::faint()))
+                    .child(Icon::new(IconName::ChevronRight).small().text_color(theme.muted_foreground))
                     .on_click(move |_, _, cx| state.update(cx, |s, cx| s.go(target.clone(), cx)))
             })),
         };
 
         // --- Temporada ---
-        let cols = columns(width, 150., 20.);
-        let card_w = px(((width - (cols as f32 - 1.) * 20.) / cols as f32).floor());
+        let gap = 1.25 * rem;
+        let cols = columns(width, 9.5 * rem, gap);
+        let card_w = px(((width - (cols as f32 - 1.) * gap) / cols as f32).floor());
         let season = match &self.season {
-            None => div().grid().grid_cols(cols as u16).gap_x_5().gap_y_7().children((0..6).map(|_| skeleton().w(card_w).h(card_w * 1.5))),
-            Some(list) if list.is_empty() => div().text_sm().text_color(theme::muted()).child("Não foi possível carregar a temporada agora."),
+            None => div().grid().grid_cols(cols as u16).gap_x_5().gap_y_8().children((0..cols).map(|_| Skeleton::new().w(card_w).h(card_w * 1.5).rounded(theme.radius_lg))),
+            Some(list) if list.is_empty() => empty_state(IconName::CircleAlert, "Não foi possível carregar a temporada agora", Some("O AniList não respondeu. Tente de novo mais tarde.".into()), cx),
             Some(list) => {
                 let list = list.clone();
-                div().grid().grid_cols(cols as u16).gap_x_5().gap_y_7().children(list.into_iter().map(|m| {
+                div().grid().grid_cols(cols as u16).gap_x_5().gap_y_8().children(list.into_iter().map(|m| {
                     let known = self.state.read(cx).catalog(m.id);
                     let id = m.id;
                     let media = m.clone();
                     let card = poster(
                         PosterProps {
-                            id: SharedString::from(format!("season-{id}")).into(),
+                            id: ElementId::Name(format!("season:{id}").into()),
                             name: m.title(),
                             media: Some(m.clone()),
                             loading: false,
@@ -164,38 +169,36 @@ impl Render for HomeView {
                 }))
             }
         };
-        let (checked, in_nuvem, total) = self.season.as_ref().map_or((0, 0, 0), |l| {
+        let (checked, in_library, total) = self.season.as_ref().map_or((0, 0, 0), |l| {
             let st = self.state.read(cx);
             let known: Vec<_> = l.iter().map(|m| st.catalog(m.id)).collect();
             (known.iter().filter(|k| k.is_some()).count(), known.iter().filter(|k| matches!(k, Some(Some(_)))).count(), l.len())
         });
         let aside = (total > 0).then(|| {
-            div()
-                .flex()
-                .items_center()
+            h_flex()
                 .gap_2()
-                .text_xs()
-                .text_color(theme::faint())
-                .when(checked < total, |d| d.child(div().size_3p5().child(spinner("season-check"))))
-                .child(format!("{in_nuvem} no acervo"))
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .when(checked < total, |d| d.child(loading(cx)))
+                .child(format!("{in_library} de {total} no acervo"))
                 .into_any_element()
         });
 
-        div()
+        v_flex()
             .w(px(width))
             .mx_auto()
-            .py_10()
-            .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(match name {
-                Some(n) => format!("Olá, {n}"),
-                None => "Bem-vindo de volta".into(),
-            }))
-            .child(div().mt_2().text_color(theme::muted()).child("O que vamos assistir hoje? Busque com Ctrl K ou escolha uma seção."))
-            .child(div().mt_10().child(sections))
+            .py_8()
+            .gap_8()
             .child(
-                div()
-                    .mt_12()
-                    .child(section_title(format!("Temporada de {} {year}", season_label(season_code)), aside))
-                    .child(season),
+                v_flex()
+                    .gap_1()
+                    .child(div().text_2xl().font_weight(FontWeight::SEMIBOLD).child(match name {
+                        Some(n) => format!("Olá, {n}"),
+                        None => "Bem-vindo de volta".into(),
+                    }))
+                    .child(div().text_color(theme.muted_foreground).child("Busque com Ctrl K ou escolha uma seção.")),
             )
+            .child(sections)
+            .child(v_flex().child(section_title(format!("Temporada de {} {year}", season_label(season_code)), aside)).child(season))
     }
 }

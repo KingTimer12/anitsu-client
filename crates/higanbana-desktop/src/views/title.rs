@@ -5,9 +5,18 @@
 
 use std::{collections::HashSet, rc::Rc};
 
-use gpui::{
-    AnyElement, Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::*, px, relative,
+use gpui_kit::{
+    AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Subscription,
+    Window, assets::IconName, div, prelude::*, px, relative,
+};
+use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex,
+    avatar::Avatar,
+    button::{Button, ButtonVariants as _},
+    link::Link,
+    tab::{Tab, TabBar},
+    tag::Tag,
 };
 use higanbana_core::{
     anilist::{
@@ -22,20 +31,20 @@ use higanbana_core::{
 
 use crate::{
     components::{
-        breadcrumbs, chip, chip_group, columns, content_width, cover, file_list, file_paths, hex_color, remote_image, skeleton,
-        FileAction,
+        breadcrumbs, columns, content_width, cover, file_list, file_paths, hex_color, option_button, option_group,
+        remote_image, FileAction,
     },
     music::album::{AlbumEvent, AlbumView, looks_like_album},
     reader::{ReadTarget, progress_map},
     state::{AppState, DlStatus, state},
-    theme,
-    ui::{icon, truncate},
+    theme::ProductColors as _,
+    ui::{empty_state, truncate},
     video::PlayTarget,
     views::load_listing,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+enum Section {
     Files,
     Cast,
     Staff,
@@ -58,10 +67,11 @@ pub struct TitleView {
     season_for: Option<String>,
     detail: Option<Option<MediaDetail>>,
     detail_for: Option<i64>,
-    tab: Tab,
+    tab: Section,
     expanded: bool,
     album: Option<Entity<AlbumView>>,
     not_album: bool,
+    _subs: Vec<Subscription>,
 }
 
 fn dirs(files: &Listing) -> Vec<FileEntry> {
@@ -83,12 +93,14 @@ fn files_of(l: &Listing) -> Option<&Vec<FileEntry>> {
 impl TitleView {
     pub fn new(title_path: String, rest: Vec<String>, media_type: MediaType, cx: &mut Context<Self>) -> Self {
         let state = state(cx);
-        cx.observe(&state, |v: &mut Self, _, cx| {
+        let subs = vec![cx.observe(&state, |v: &mut Self, _, cx| {
             v.sync(cx);
             cx.notify();
-        })
-        .detach();
-        load_listing(&state, title_path.clone(), cx, |v: &mut Self, r| v.title_listing = Some(r));
+        })];
+        load_listing(&state, title_path.clone(), cx, |v: &mut Self, r, cx| {
+            v.title_listing = Some(r);
+            v.sync(cx);
+        });
         Self {
             state,
             title_path,
@@ -101,10 +113,11 @@ impl TitleView {
             season_for: None,
             detail: None,
             detail_for: None,
-            tab: Tab::Files,
+            tab: Section::Files,
             expanded: false,
             album: None,
             not_album: false,
+            _subs: subs,
         }
     }
 
@@ -162,11 +175,11 @@ impl TitleView {
         self.season_name().unwrap_or_else(|| base_name(&self.title_path).to_owned())
     }
 
-    fn summary(&self, cx: &gpui::App) -> Option<Option<MediaSummary>> {
+    fn summary(&self, cx: &gpui_kit::App) -> Option<Option<MediaSummary>> {
         self.state.read(cx).lookup(&self.lookup_name(), self.media_type)
     }
 
-    fn media(&self, cx: &gpui::App) -> Option<MediaSummary> {
+    fn media(&self, cx: &gpui_kit::App) -> Option<MediaSummary> {
         match &self.detail {
             Some(Some(d)) => Some(d.summary.clone()),
             _ => self.summary(cx).flatten(),
@@ -187,7 +200,10 @@ impl TitleView {
         {
             self.season_for = Some(season);
             self.season_listing = None;
-            load_listing(&self.state, self.season_path(), cx, |v: &mut Self, r| v.season_listing = Some(r));
+            load_listing(&self.state, self.season_path(), cx, |v: &mut Self, r, cx| {
+                v.season_listing = Some(r);
+                v.sync(cx);
+            });
         }
         if let Some(path) = self.files_path()
             && self.files_for.as_deref() != Some(path.as_str())
@@ -196,7 +212,10 @@ impl TitleView {
             self.files_listing = None;
             self.album = None;
             self.not_album = false;
-            load_listing(&self.state, path, cx, |v: &mut Self, r| v.files_listing = Some(r));
+            load_listing(&self.state, path, cx, |v: &mut Self, r, cx| {
+                v.files_listing = Some(r);
+                v.ensure_album(cx);
+            });
         }
         let name = self.lookup_name();
         let media_type = self.media_type;
@@ -222,11 +241,28 @@ impl TitleView {
         }
     }
 
-    fn heading(&self, cx: &gpui::App) -> String {
+    /// Pasta de músicas vira encarte (se não for álbum, ele avisa e volta à lista).
+    fn ensure_album(&mut self, cx: &mut Context<Self>) {
+        let Some(list) = files_of(&self.files_listing).cloned() else { return };
+        if self.album.is_some() || self.not_album || !looks_like_album(&list) {
+            return;
+        }
+        let (p, w) = (self.files_for.clone().unwrap_or_default(), Some(self.heading(cx)));
+        let view = cx.new(|cx| AlbumView::new(p, list, w, cx));
+        self._subs.push(cx.subscribe(&view, |v, _, e: &AlbumEvent, cx| {
+            if matches!(e, AlbumEvent::NotAlbum) {
+                v.not_album = true;
+                cx.notify();
+            }
+        }));
+        self.album = Some(view);
+    }
+
+    fn heading(&self, cx: &gpui_kit::App) -> String {
         self.media(cx).map_or_else(|| folder_title(&self.lookup_name()), |m| m.title())
     }
 
-    fn play(&self, file: FileEntry, cx: &mut gpui::App) {
+    fn play(&self, file: FileEntry, cx: &mut gpui_kit::App) {
         let (Some(dir), Some(files)) = (self.files_for.clone(), files_of(&self.files_listing).cloned()) else { return };
         let t = PlayTarget {
             dir,
@@ -239,7 +275,7 @@ impl TitleView {
         self.state.update(cx, |s, cx| s.play(t, cx));
     }
 
-    fn read(&self, file: FileEntry, cx: &mut gpui::App) {
+    fn read(&self, file: FileEntry, cx: &mut gpui_kit::App) {
         let (Some(dir), Some(files)) = (self.files_for.clone(), files_of(&self.files_listing).cloned()) else { return };
         let t = ReadTarget { dir, file, files, title_path: self.title_path.clone(), title: self.heading(cx) };
         self.state.update(cx, |s, cx| s.read(t, cx));
@@ -248,12 +284,12 @@ impl TitleView {
 
 impl Render for TitleView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync(cx);
-        let width = content_width(window, 1152.);
+        let theme = cx.theme().clone();
+        let rem = f32::from(window.rem_size());
+        let width = content_width(window, 72. * rem);
         let media = self.media(cx);
         let full = self.full().cloned();
         let heading = self.heading(cx);
-        let accent = media.as_ref().and_then(|m| hex_color(m.color())).unwrap_or(theme::accent());
         let files = files_of(&self.files_listing).cloned();
         let files_path = self.files_for.clone().unwrap_or_default();
         let st = self.state.read(cx);
@@ -316,26 +352,28 @@ impl Render for TitleView {
             .collect();
 
         // --- Abas ---
-        let mut tabs = vec![(Tab::Files, if self.media_type == MediaType::Manga { "Arquivos" } else { "Episódios" }, (!episode_paths.is_empty()).then_some(episode_paths.len()))];
+        let mut tabs = vec![(Section::Files, if self.media_type == MediaType::Manga { "Arquivos" } else { "Episódios" }, (!episode_paths.is_empty()).then_some(episode_paths.len()))];
         if let Some(d) = &full {
             if !d.characters.edges.is_empty() {
-                tabs.push((Tab::Cast, "Personagens", Some(d.characters.edges.len())));
+                tabs.push((Section::Cast, "Personagens", Some(d.characters.edges.len())));
             }
             if !d.staff.edges.is_empty() {
                 let n = d.staff.edges.iter().map(|e| e.node.id).collect::<HashSet<_>>().len();
-                tabs.push((Tab::Staff, "Equipe", Some(n)));
+                tabs.push((Section::Staff, "Equipe", Some(n)));
             }
             if !d.relations.edges.is_empty() {
-                tabs.push((Tab::Related, "Relacionadas", Some(d.relations.edges.len())));
+                tabs.push((Section::Related, "Relacionadas", Some(d.relations.edges.len())));
             }
-            tabs.push((Tab::Details, "Detalhes", None));
+            tabs.push((Section::Details, "Detalhes", None));
         }
-        let active_tab = if tabs.iter().any(|t| t.0 == self.tab) { self.tab } else { Tab::Files };
+        let active_ix = tabs.iter().position(|t| t.0 == self.tab).unwrap_or(0);
+        let active_tab = tabs[active_ix].0;
 
         let meta: Vec<String> = media
             .as_ref()
             .map(|m| {
                 [
+                    m.average_score.map(|s| format!("Nota {s}%")),
                     m.format.as_deref().map(|f| text::format(Some(f))),
                     m.year().map(|y| y.to_string()),
                     m.episodes.map(|e| format!("{e} {}", if e == 1 { "episódio" } else { "episódios" })),
@@ -353,87 +391,69 @@ impl Render for TitleView {
         let has_banner = media.as_ref().is_some_and(|m| m.banner_image.is_some());
         let not_found = matches!(self.summary(cx), Some(None)) && self.title_listing.is_some();
 
-        // --- Cabeçalho: botões ---
-        let mut actions = div().mt_6().flex().flex_wrap().items_center().gap_2();
+        // --- Ações: uma principal (continuar de onde parou), o resto secundário ---
+        let mut actions = h_flex().flex_wrap().gap_2();
+        let mut has_primary = false;
         if let Some((f, at)) = resume.clone() {
-            let label = resume_label(&f, at);
+            has_primary = true;
             actions = actions.child(
-                big_button("play-resume", Some("play"), label, true, accent).on_click(cx.listener(move |v, _, _, cx| v.play(f.clone(), cx))),
+                Button::new("play-resume").primary().icon(IconName::Play).label(resume_label(&f, at)).on_click(cx.listener(move |v, _, _, cx| v.play(f.clone(), cx))),
             );
         }
         if let Some((f, page, res, unit)) = resume_read.clone() {
             let label = read_label(&f, page, res, &unit);
-            actions = actions.child(
-                big_button("read-resume", Some("book-open"), label, true, accent).on_click(cx.listener(move |v, _, _, cx| v.read(f.clone(), cx))),
-            );
+            let button = Button::new("read-resume").icon(IconName::BookOpen).label(label).on_click(cx.listener(move |v, _, _, cx| v.read(f.clone(), cx)));
+            actions = actions.child(if has_primary { button } else { button.primary() });
         }
         let dl_label = if !remaining.is_empty() {
             format!("Baixar {} ({})", if remaining.len() == episode_paths.len() { "todos" } else { "restantes" }, remaining.len())
         } else if !episode_paths.is_empty() {
-            "Tudo na fila ou baixado".into()
+            "Tudo baixado ou na fila".into()
         } else {
-            "Nada para baixar aqui".into()
+            "Nada para baixar".into()
         };
-        let primary_dl = videos.is_empty() && comics.is_empty();
         let st_entity = self.state.clone();
-        let rem = remaining.clone();
+        let rem_paths = remaining.clone();
         actions = actions.child(
-            big_button("download-all", Some("download"), dl_label, primary_dl, accent)
-                .when(remaining.is_empty(), |d| d.opacity(0.5))
-                .on_click(move |_, _, cx| {
-                    if !rem.is_empty() {
-                        st_entity.update(cx, |s, cx| s.start_downloads(&rem, cx));
-                    }
-                }),
+            Button::new("download-all").outline().icon(IconName::Download).label(dl_label).disabled(remaining.is_empty()).on_click(move |_, _, cx| {
+                st_entity.update(cx, |s, cx| s.start_downloads(&rem_paths, cx));
+            }),
         );
+        // Destinos externos (abrem no navegador): Link, não botão.
+        let mut links = h_flex().gap_4().text_sm();
         if let Some(t) = full.as_ref().and_then(|d| d.trailer.clone()).filter(|t| t.site.as_deref() == Some("youtube")) {
-            let url = format!("https://www.youtube.com/watch?v={}", t.id);
-            actions = actions.child(ghost_button("trailer", "play", "Trailer").on_click(move |_, _, cx| cx.open_url(&url)));
+            links = links.child(Link::new("trailer").href(format!("https://www.youtube.com/watch?v={}", t.id)).child("Trailer no YouTube"));
         }
         if let Some(url) = full.as_ref().and_then(|d| d.site_url.clone()) {
-            actions = actions.child(ghost_button("anilist", "external-link", "AniList").on_click(move |_, _, cx| cx.open_url(&url)));
+            links = links.child(Link::new("anilist").href(url).child("Página no AniList"));
         }
 
         // --- Sinopse ---
         let synopsis = full.as_ref().map(|d| text::clean_description(d.description.as_deref())).filter(|(p, _)| !p.is_empty()).map(|(paras, source)| {
             let long = paras.join(" ").len() > 300;
             let expanded = self.expanded;
-            div()
-                .mt_5()
-                .max_w(px(680.))
+            v_flex()
+                .max_w(px(42. * rem))
+                .gap_2()
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
+                    v_flex()
                         .gap_3()
-                        .text_color(theme::white_a(0.8))
+                        .text_color(theme.foreground.opacity(0.85))
                         .line_height(relative(1.6))
                         .when(long && !expanded, |d| d.line_clamp(3))
                         .children(if long && !expanded { vec![paras.join(" ")] } else { paras.clone() }),
                 )
                 .when(long || source.is_some(), |d| {
                     d.child(
-                        div()
-                            .mt_1p5()
-                            .flex()
-                            .items_center()
+                        h_flex()
                             .gap_3()
-                            .text_sm()
                             .when(long, |d| {
-                                d.child(
-                                    div()
-                                        .id("more")
-                                        .cursor_pointer()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme::accent_ink())
-                                        .child(if expanded { "Mostrar menos" } else { "Ler mais" })
-                                        .on_click(cx.listener(|v, _, _, cx| {
-                                            v.expanded = !v.expanded;
-                                            cx.notify();
-                                        })),
-                                )
+                                d.child(Button::new("more").ghost().xsmall().label(if expanded { "Mostrar menos" } else { "Mostrar mais" }).on_click(cx.listener(|v, _, _, cx| {
+                                    v.expanded = !v.expanded;
+                                    cx.notify();
+                                })))
                             })
-                            .when_some(source.filter(|_| expanded || !long), |d, s| d.child(div().text_xs().text_color(theme::faint()).child(format!("Fonte: {s}")))),
+                            .when_some(source.filter(|_| expanded || !long), |d, s| d.child(div().text_xs().text_color(theme.muted_foreground).child(format!("Fonte: {s}")))),
                     )
                 })
         });
@@ -445,291 +465,204 @@ impl Render for TitleView {
             let season_name = self.season_name();
             let release_name = self.release_name();
             let single_tags = if releases.len() == 1 { release_tags(&releases[0].name) } else { Vec::new() };
-            let mut col = div().flex().flex_col().gap_5();
-            let mut chips = div().flex().flex_col().gap_3();
+            let mut options = v_flex().gap_3();
             if seasons.len() > 1 {
-                chips = chips.child(chip_group("Temporada").child(div().flex().flex_wrap().gap_2().children(seasons.iter().enumerate().map(|(i, s)| {
+                options = options.child(option_group("Temporada", cx).child(h_flex().flex_wrap().gap_2().children(seasons.iter().map(|s| {
                     let target = join_path(&self.title_path, &s.name);
                     let st = self.state.clone();
-                    chip(SharedString::from(format!("season-{i}")), Some(&s.name) == season_name.as_ref())
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(folder_year(&s.name).map(|y| y.to_string()).unwrap_or_default()))
-                        .child(truncate(folder_title(&s.name)).max_w(px(224.)))
+                    let year = folder_year(&s.name).map(|y| format!("{y} · ")).unwrap_or_default();
+                    option_button(ElementId::Name(format!("season:{}", s.name).into()), format!("{year}{}", folder_title(&s.name)), Some(&s.name) == season_name.as_ref())
                         .on_click(move |_, _, cx| st.update(cx, |s, cx| s.go(target.clone(), cx)))
                 }))));
             }
             if releases.len() > 1 {
                 let season_path = self.season_path();
-                chips = chips.child(chip_group("Versão").child(div().flex().flex_wrap().gap_2().children(releases.iter().enumerate().map(|(i, r)| {
+                options = options.child(option_group("Versão", cx).child(h_flex().flex_wrap().gap_2().children(releases.iter().map(|r| {
                     let tags = release_tags(&r.name);
                     let target = join_path(&season_path, &r.name);
                     let st = self.state.clone();
-                    chip(SharedString::from(format!("release-{i}")), Some(&r.name) == release_name.as_ref())
-                        .child(if tags.is_empty() { folder_title(&r.name) } else { tags.join(" ") })
-                        .on_click(move |_, _, cx| st.update(cx, |s, cx| s.go(target.clone(), cx)))
+                    option_button(
+                        ElementId::Name(format!("release:{}", r.name).into()),
+                        if tags.is_empty() { folder_title(&r.name) } else { tags.join(" ") },
+                        Some(&r.name) == release_name.as_ref(),
+                    )
+                    .on_click(move |_, _, cx| st.update(cx, |s, cx| s.go(target.clone(), cx)))
                 }))));
             }
             if !single_tags.is_empty() {
-                chips = chips.child(chip_group("Versão").child(div().pt_1p5().text_sm().text_color(theme::muted()).child(single_tags.join(" "))));
+                options = options.child(option_group("Versão", cx).child(div().pt_1().text_sm().text_color(theme.muted_foreground).child(single_tags.join(" "))));
             }
-            col = col.child(chips);
-            match (&self.files_listing, files.clone()) {
-                (Some(Err(e)), _) => col = col.child(div().text_color(theme::danger()).child(e.clone())),
-                (_, None) => col = col.child(skeleton().h(px(320.)).rounded_2xl()),
+            let body = match (&self.files_listing, files.clone()) {
+                (Some(Err(e)), _) => empty_state(IconName::WifiOff, "Não foi possível abrir os arquivos", Some(e.clone().into()), cx).into_any_element(),
+                (_, None) => Skeleton::new().h_72().rounded(theme.radius_lg).into_any_element(),
+                (_, Some(_)) if self.album.is_some() && !self.not_album => self.album.clone().unwrap().into_any_element(),
                 (_, Some(list)) => {
-                    if looks_like_album(&list) && !self.not_album {
-                        if self.album.is_none() {
-                            let (p, f, w) = (files_path.clone(), list.clone(), Some(heading.clone()));
-                            let view = cx.new(|cx| AlbumView::new(p, f, w, cx));
-                            cx.subscribe(&view, |v, _, e: &AlbumEvent, cx| {
-                                if matches!(e, AlbumEvent::NotAlbum) {
-                                    v.not_album = true;
-                                    cx.notify();
-                                }
-                            })
-                            .detach();
-                            self.album = Some(view);
+                    let this = cx.entity().downgrade();
+                    let on_play: FileAction = Rc::new({
+                        let this = this.clone();
+                        move |f, _, cx| {
+                            let _ = this.update(cx, |v, cx| v.play(f.clone(), cx));
                         }
-                        col = col.child(self.album.clone().unwrap());
-                    } else {
-                        let this = cx.entity().downgrade();
-                        let on_play: FileAction = Rc::new({
-                            let this = this.clone();
-                            move |f, _, cx| {
-                                let _ = this.update(cx, |v, cx| v.play(f.clone(), cx));
-                            }
-                        });
-                        let on_read: FileAction = Rc::new(move |f, _, cx| {
-                            let _ = this.update(cx, |v, cx| v.read(f.clone(), cx));
-                        });
-                        col = col.child(file_list(&files_path, &list, Some(on_play), Some(on_read), cx));
-                    }
+                    });
+                    let on_read: FileAction = Rc::new(move |f, _, cx| {
+                        let _ = this.update(cx, |v, cx| v.read(f.clone(), cx));
+                    });
+                    file_list(&files_path, &list, Some(on_play), Some(on_read), cx).into_any_element()
                 }
-            }
-            col
+            };
+            v_flex().gap_5().child(options).child(body)
         };
 
         let panel: AnyElement = match (active_tab, &full) {
-            (Tab::Cast, Some(d)) => cast(d, width, cx).into_any_element(),
-            (Tab::Staff, Some(d)) => staff(d, width, cx).into_any_element(),
-            (Tab::Related, Some(d)) => related(d, width, cx).into_any_element(),
-            (Tab::Details, Some(d)) => facts(d).into_any_element(),
+            (Section::Cast, Some(d)) => cast(d, width, rem, cx).into_any_element(),
+            (Section::Staff, Some(d)) => staff(d, width, rem, cx).into_any_element(),
+            (Section::Related, Some(d)) => related(d, width, rem, cx).into_any_element(),
+            (Section::Details, Some(d)) => facts(d, cx).into_any_element(),
             _ => files_tab.into_any_element(),
         };
 
         let native = media.as_ref().and_then(|m| m.title.native.clone()).filter(|n| *n != heading);
         let english = media.as_ref().and_then(|m| m.title.english.clone()).filter(|n| *n != heading);
         let genres = media.as_ref().map(|m| m.genres.iter().map(|g| text::genre(g)).collect::<Vec<_>>().join(", ")).filter(|g| !g.is_empty());
-        let score = media.as_ref().and_then(|m| m.average_score);
+        let tab_ids: Vec<Section> = tabs.iter().map(|t| t.0).collect();
 
         div()
             .relative()
             .min_h_full()
-            // Fundo: banner esmaecido.
+            // Banner esmaecido no topo: imagem é mídia, o véu vem do fundo do tema.
             .child(
                 div()
                     .absolute()
                     .top_0()
                     .left_0()
                     .right_0()
-                    .h(px(380.))
+                    .h_96()
                     .overflow_hidden()
                     .children(banner.map(|b| div().absolute().inset_0().opacity(if has_banner { 0.45 } else { 0.25 }).child(remote_image(Some(&b), cx))))
-                    .child(div().absolute().inset_0().bg(gpui::linear_gradient(
+                    .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
                         180.,
-                        gpui::linear_color_stop(gpui::Rgba { a: 0.3, ..theme::canvas() }, 0.),
-                        gpui::linear_color_stop(theme::canvas(), 1.),
+                        gpui_kit::linear_color_stop(theme.background.opacity(0.3), 0.),
+                        gpui_kit::linear_color_stop(theme.background, 1.),
                     ))),
             )
             .child(
-                div()
+                v_flex()
                     .relative()
                     .w(px(width))
                     .mx_auto()
-                    .pt_5()
+                    .pt_6()
                     .pb_16()
+                    .gap_8()
                     .child(breadcrumbs(&self.title_path, cx))
                     .child(
-                        div()
-                            .mt_20()
-                            .flex()
+                        h_flex()
+                            .mt_12()
                             .items_start()
-                            .gap_9()
-                            .child(div().flex_none().shadow_lg().child(cover(media.as_ref(), &self.lookup_name(), Some(px(184.)), cx)))
+                            .gap_8()
+                            .child(div().flex_none().shadow_lg().rounded(theme.radius_lg).child(cover(media.as_ref(), &self.lookup_name(), Some(px(11.5 * rem)), cx)))
                             .child(
-                                div()
+                                v_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .pt_2()
-                                    .children(native.map(|n| div().mb_1().text_sm().text_color(theme::muted()).child(n)))
-                                    .child(div().text_size(px(44.)).line_height(relative(1.05)).font_weight(FontWeight::BOLD).child(heading.clone()))
-                                    .children(english.map(|n| div().mt_1p5().text_color(theme::muted()).child(n)))
-                                    .when(media.is_some(), |d| {
-                                        let mut row = div().mt_4().flex().flex_wrap().items_center().gap_x_3().gap_y_1().text_sm().text_color(theme::muted());
-                                        if let Some(s) = score {
-                                            row = row.child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme::fg())
-                                                    .child(icon("star").size_3p5().text_color(gpui::rgb(0xfcd34d)))
-                                                    .child(format!("{s}%")),
-                                            );
-                                        }
-                                        for (i, m) in meta.iter().enumerate() {
-                                            if i > 0 || score.is_some() {
-                                                row = row.child(div().size_1().rounded_full().bg(theme::faint()));
-                                            }
-                                            row = row.child(m.clone());
-                                        }
-                                        d.child(row)
-                                    })
-                                    .children(genres.map(|g| div().mt_2().text_sm().text_color(theme::accent_ink()).child(g)))
-                                    .children(synopsis)
-                                    .when(not_found, |d| {
+                                    .gap_4()
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .children(native.map(|n| div().text_sm().text_color(theme.muted_foreground).child(n)))
+                                            .child(div().text_3xl().line_height(relative(1.1)).font_weight(FontWeight::BOLD).child(heading.clone()))
+                                            .children(english.map(|n| div().text_color(theme.muted_foreground).child(n))),
+                                    )
+                                    .when(!meta.is_empty() || genres.is_some(), |d| {
                                         d.child(
-                                            div()
-                                                .mt_5()
-                                                .max_w(px(600.))
-                                                .text_sm()
-                                                .text_color(theme::muted())
-                                                .child("Não achamos este título no AniList. Os arquivos continuam disponíveis abaixo."),
+                                            v_flex()
+                                                .gap_1()
+                                                .when(!meta.is_empty(), |d| d.child(div().text_sm().text_color(theme.muted_foreground).child(meta.join(" · "))))
+                                                .children(genres.map(|g| div().text_sm().child(g))),
                                         )
                                     })
-                                    .child(actions),
+                                    .children(synopsis)
+                                    .when(not_found, |d| {
+                                        d.child(div().max_w(px(38. * rem)).text_sm().text_color(theme.muted_foreground).child("Não achamos este título no AniList. Os arquivos continuam disponíveis abaixo."))
+                                    })
+                                    .child(actions)
+                                    .child(links),
                             ),
                     )
-                    // Abas
-                    .child(div().mt_12().flex().gap_1().border_b_1().border_color(theme::line()).children(tabs.into_iter().map(|(t, label, count)| {
-                        let active = t == active_tab;
-                        div()
-                            .id(SharedString::from(format!("tab-{label}")))
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .h_12()
-                            .px_3()
-                            .cursor_pointer()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if active { theme::fg() } else { theme::muted() })
-                            .hover(|d| d.text_color(theme::fg()))
-                            .child(label)
-                            .children(count.map(|c| div().text_xs().text_color(if active { theme::accent_ink() } else { theme::faint() }).child(c.to_string())))
-                            .when(active, |d| d.child(div().absolute().bottom(px(-1.)).left_3().right_3().h(px(2.)).rounded_full().bg(accent)))
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                v.tab = t;
-                                cx.notify();
-                            }))
-                    })))
-                    .child(div().pt_8().child(panel)),
+                    .child(
+                        v_flex()
+                            .gap_6()
+                            .child(
+                                TabBar::new("title-tabs")
+                                    .underline()
+                                    .selected_index(active_ix)
+                                    .on_click(cx.listener(move |v, ix: &usize, _, cx| {
+                                        if let Some(t) = tab_ids.get(*ix) {
+                                            v.tab = *t;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .children(tabs.into_iter().map(|(_, label, count)| match count {
+                                        Some(n) => Tab::new().label(format!("{label} {n}")),
+                                        None => Tab::new().label(label),
+                                    })),
+                            )
+                            .child(panel),
+                    ),
             )
     }
-}
-
-fn big_button(id: &'static str, icon_name: Option<&'static str>, label: String, primary: bool, accent: gpui::Rgba) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .h_10()
-        .px_4()
-        .rounded_xl()
-        .cursor_pointer()
-        .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
-        .map(|d| {
-            if primary {
-                d.bg(accent).text_color(theme::white()).hover(|s| s.opacity(0.9))
-            } else {
-                d.border_1().border_color(theme::line_strong()).bg(theme::white_a(0.05)).hover(|s| s.bg(theme::white_a(0.1)))
-            }
-        })
-        .children(icon_name.map(|n| icon(n).size_4().text_color(theme::white())))
-        .child(label)
-}
-
-fn ghost_button(id: &'static str, icon_name: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .h_10()
-        .px_4()
-        .rounded_xl()
-        .cursor_pointer()
-        .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme::muted())
-        .hover(|d| d.bg(theme::white_a(0.08)).text_color(theme::fg()))
-        .child(icon(icon_name).size_4().text_color(theme::muted()))
-        .child(label)
 }
 
 fn is_placeholder(url: Option<&str>) -> bool {
     url.is_none_or(|u| u.ends_with("/default.jpg") || u.ends_with("/default.png"))
 }
 
-fn initials(name: Option<&str>) -> String {
-    name.unwrap_or("?").split_whitespace().take(2).filter_map(|p| p.chars().next()).flat_map(char::to_uppercase).collect()
-}
-
-/// Foto de pessoa/personagem; monograma quando não há imagem.
-fn portrait(url: Option<&str>, name: Option<&str>, cx: &mut gpui::App) -> gpui::Div {
-    let base = div().size_12().flex_none().rounded_full().overflow_hidden();
+/// Foto de pessoa/personagem; iniciais quando não há imagem.
+fn portrait(url: Option<&str>, name: Option<&str>, cx: &mut gpui_kit::App) -> AnyElement {
     if is_placeholder(url) {
-        base.flex().items_center().justify_center().bg(theme::accent_soft()).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::accent_ink()).child(initials(name))
+        Avatar::new().name(name.unwrap_or("?").to_owned()).into_any_element()
     } else {
-        base.child(remote_image(url, cx))
+        div().size_12().flex_none().rounded_full().overflow_hidden().bg(cx.theme().muted).child(remote_image(url, cx)).into_any_element()
     }
 }
 
-fn cast(d: &MediaDetail, width: f32, cx: &mut gpui::App) -> gpui::Div {
-    let cols = columns(width, 320., 32.);
+fn cast(d: &MediaDetail, width: f32, rem: f32, cx: &mut gpui_kit::App) -> gpui_kit::Div {
+    let theme = cx.theme().clone();
+    let cols = columns(width, 20. * rem, 2. * rem);
     div().grid().grid_cols(cols as u16).gap_x_8().children(d.characters.edges.iter().map(|e| {
         let va = e.voice_actors.first();
-        div()
-            .flex()
-            .items_center()
+        h_flex()
             .gap_3()
             .py_3()
             .border_b_1()
-            .border_color(theme::line())
+            .border_color(theme.border)
             .child(portrait(e.node.image.as_ref().and_then(|i| i.large.as_deref()), e.node.name.full.as_deref(), cx))
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
                     .child(truncate(e.node.name.full.clone().unwrap_or_default()).text_sm().font_weight(FontWeight::SEMIBOLD))
-                    .child(div().text_xs().text_color(theme::faint()).child(text::character_role(Some(&e.role)))),
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(text::character_role(Some(&e.role)))),
             )
             .children(va.map(|va| {
-                div()
-                    .flex()
-                    .items_center()
+                h_flex()
                     .gap_3()
                     .flex_1()
                     .min_w_0()
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
-                            .flex()
-                            .flex_col()
                             .items_end()
                             .child(truncate(va.name.full.clone().unwrap_or_default()).text_sm())
-                            .child(div().text_xs().text_color(theme::faint()).child(va.name.native.clone().unwrap_or_default())),
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(va.name.native.clone().unwrap_or_default())),
                     )
                     .child(portrait(va.image.as_ref().and_then(|i| i.large.as_deref()), va.name.full.as_deref(), cx))
             }))
     }))
 }
 
-fn staff(d: &MediaDetail, width: f32, cx: &mut gpui::App) -> gpui::Div {
+fn staff(d: &MediaDetail, width: f32, rem: f32, cx: &mut gpui_kit::App) -> gpui_kit::Div {
+    let theme = cx.theme().clone();
     // Agrupa papéis da mesma pessoa: "Direção, Criação original".
     let mut people: Vec<(&higanbana_core::anilist::types::Person, Vec<String>)> = Vec::new();
     for e in &d.staff.edges {
@@ -738,45 +671,59 @@ fn staff(d: &MediaDetail, width: f32, cx: &mut gpui::App) -> gpui::Div {
             None => people.push((&e.node, vec![text::staff_role(&e.role)])),
         }
     }
-    let cols = columns(width, 260., 32.);
+    let cols = columns(width, 16. * rem, 2. * rem);
     div().grid().grid_cols(cols as u16).gap_x_8().children(people.into_iter().map(|(p, roles)| {
-        div()
-            .flex()
-            .items_center()
+        h_flex()
             .gap_3()
             .py_3()
             .border_b_1()
-            .border_color(theme::line())
+            .border_color(theme.border)
             .child(portrait(p.image.as_ref().and_then(|i| i.large.as_deref()), p.name.full.as_deref(), cx))
             .child(
-                div()
+                v_flex()
                     .min_w_0()
                     .child(truncate(p.name.full.clone().unwrap_or_default()).text_sm().font_weight(FontWeight::SEMIBOLD))
-                    .child(div().text_xs().text_color(theme::muted()).line_clamp(2).child(roles.join(", "))),
+                    .child(div().text_xs().text_color(theme.muted_foreground).line_clamp(2).child(roles.join(", "))),
             )
     }))
 }
 
-fn related(d: &MediaDetail, width: f32, cx: &mut gpui::App) -> gpui::Div {
-    let cols = columns(width, 132., 20.);
-    let card_w = px(((width - (cols as f32 - 1.) * 20.) / cols as f32).floor());
-    div().child(div().mb_5().text_sm().text_color(theme::faint()).child("Abrem no AniList.")).child(
-        div().grid().grid_cols(cols as u16).gap_x_5().gap_y_7().children(d.relations.edges.iter().enumerate().map(|(i, e)| {
+/// Obras relacionadas: abrem no AniList (destino externo).
+fn related(d: &MediaDetail, width: f32, rem: f32, cx: &mut gpui_kit::App) -> gpui_kit::Div {
+    let theme = cx.theme().clone();
+    let gap = 1.25 * rem;
+    let cols = columns(width, 8.25 * rem, gap);
+    let card_w = px(((width - (cols as f32 - 1.) * gap) / cols as f32).floor());
+    v_flex().gap_5().child(div().text_sm().text_color(theme.muted_foreground).child("Abrem no AniList, no navegador.")).child(
+        div().grid().grid_cols(cols as u16).gap_x_5().gap_y_8().children(d.relations.edges.iter().map(|e| {
             let n = &e.node;
             let kind = n.media_type.map_or("anime", |t| if t == MediaType::Manga { "manga" } else { "anime" });
             let url = format!("https://anilist.co/{kind}/{}", n.id);
-            let bg = n.cover_image.as_ref().and_then(|c| hex_color(c.color.as_deref())).unwrap_or(theme::surface());
-            div()
-                .id(SharedString::from(format!("rel-{i}")))
+            let bg = n.cover_image.as_ref().and_then(|c| hex_color(c.color.as_deref())).unwrap_or(theme.muted);
+            v_flex()
+                .id(ElementId::Name(format!("rel:{}", n.id).into()))
                 .w(card_w)
+                .gap_1()
                 .cursor_pointer()
-                .child(div().mb_2().w(card_w).h(card_w * 1.5).rounded_xl().overflow_hidden().bg(bg).child(remote_image(n.cover_image.as_ref().and_then(|c| c.large.as_deref()), cx)))
-                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::accent_ink()).child(text::relation(Some(&e.relation_type))))
+                .child(
+                    div()
+                        .mb_1()
+                        .w(card_w)
+                        .h(card_w * 1.5)
+                        .rounded(theme.radius_lg)
+                        .overflow_hidden()
+                        .bg(bg)
+                        .border_1()
+                        .border_color(gpui_kit::transparent_black())
+                        .hover(|d| d.border_color(theme.ring))
+                        .child(remote_image(n.cover_image.as_ref().and_then(|c| c.large.as_deref()), cx)),
+                )
+                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme.primary_ink()).child(text::relation(Some(&e.relation_type))))
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).line_clamp(2).child(n.title.user_preferred.clone().unwrap_or_default()))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::faint())
+                        .text_color(theme.muted_foreground)
                         .child(format!("{} {}", text::format(n.format.as_deref()), n.start_date.and_then(|d| d.year).map(|y| y.to_string()).unwrap_or_default())),
                 )
                 .on_click(move |_, _, cx| cx.open_url(&url))
@@ -786,7 +733,8 @@ fn related(d: &MediaDetail, width: f32, cx: &mut gpui::App) -> gpui::Div {
 
 type FactGroup<'a> = (&'a str, Vec<(&'a str, Option<String>)>);
 
-fn facts(d: &MediaDetail) -> gpui::Div {
+fn facts(d: &MediaDetail, cx: &gpui_kit::App) -> gpui_kit::Div {
+    let theme = cx.theme().clone();
     let m = &d.summary;
     let groups: Vec<FactGroup> = vec![
         (
@@ -820,33 +768,29 @@ fn facts(d: &MediaDetail) -> gpui::Div {
         ),
     ];
     let tags: Vec<&str> = d.tags.iter().filter(|t| !t.spoiler && t.rank >= 60).take(12).map(|t| t.name.as_str()).collect();
-    div()
-        .flex()
-        .flex_col()
-        .gap_10()
-        .child(div().grid().grid_cols(3).gap_10().children(groups.into_iter().filter_map(|(g, rows)| {
+    v_flex()
+        .gap_8()
+        .child(div().grid().grid_cols(3).gap_8().children(groups.into_iter().filter_map(|(g, rows)| {
             let rows: Vec<(&str, String)> = rows.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect();
             (!rows.is_empty()).then(|| {
-                div().child(div().mb_3().text_sm().font_weight(FontWeight::SEMIBOLD).child(g)).children(rows.into_iter().map(|(k, v)| {
-                    div()
-                        .flex()
+                v_flex().child(div().mb_2().text_sm().font_weight(FontWeight::SEMIBOLD).child(g)).children(rows.into_iter().map(|(k, v)| {
+                    h_flex()
+                        .items_start()
                         .justify_between()
                         .gap_6()
-                        .py_2p5()
+                        .py_2()
                         .border_b_1()
-                        .border_color(theme::line())
+                        .border_color(theme.border)
                         .text_sm()
-                        .child(div().flex_none().text_color(theme::faint()).child(k))
+                        .child(div().flex_none().text_color(theme.muted_foreground).child(k))
                         .child(div().text_right().child(v))
                 }))
             })
         })))
         .when(!tags.is_empty(), |d| {
             d.child(
-                div().child(div().mb_3().text_sm().font_weight(FontWeight::SEMIBOLD).child("Temas")).child(
-                    div().flex().flex_wrap().gap_1p5().children(
-                        tags.into_iter().map(|t| div().px_3().py_1().rounded_full().border_1().border_color(theme::line()).text_xs().text_color(theme::muted()).child(t.to_owned())),
-                    ),
+                v_flex().gap_2().child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Temas")).child(
+                    h_flex().flex_wrap().gap_1p5().children(tags.into_iter().map(|t| Tag::secondary().small().child(t.to_owned()))),
                 ),
             )
         })

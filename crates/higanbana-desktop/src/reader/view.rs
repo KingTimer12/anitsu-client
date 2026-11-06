@@ -7,10 +7,22 @@ use std::{
     time::Duration,
 };
 
-use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement, KeyDownEvent,
-    ObjectFit, ParentElement, Render, ScrollHandle, SharedString, Stateful, Styled, Task, Window, WindowControlArea, div,
-    img, point, prelude::*, px, relative,
+use gpui_kit::{
+    AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement,
+    KeyDownEvent, Keystroke, ObjectFit, ParentElement, Render, ScrollHandle, SharedString, Stateful, Styled, Subscription,
+    Task, Window, assets::IconName, div, img, point, prelude::*, px, relative, rems,
+};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, Sizable as _, TitleBar, h_flex, v_flex,
+    button::{Button, ButtonVariants as _},
+    input::{Input, InputEvent, InputState},
+    kbd::Kbd,
+    radio::RadioGroup,
+    separator::Separator as Divider,
+    skeleton::Skeleton,
+    spinner::Spinner,
+    switch::Switch,
+    Selectable as _,
 };
 use higanbana_core::{
     Core,
@@ -28,11 +40,9 @@ use higanbana_core::{
 
 use super::ReadTarget;
 use crate::{
-    chrome::window_controls,
-    input::{InputEvent, TextInput},
     state::{AppState, DlStatus, Img, state},
-    theme,
-    ui::{icon, truncate},
+    theme::ProductColors as _,
+    ui::truncate,
 };
 
 const MODES: [ReadMode; 4] = [ReadMode::Single, ReadMode::Double, ReadMode::Long, ReadMode::Wide];
@@ -95,15 +105,16 @@ pub struct ReaderView {
     panel: Option<Panel>,
     stirred: bool,
     stir_task: Option<Task<()>>,
-    filter: Entity<TextInput>,
+    filter: Entity<InputState>,
     /// Imagens desta leitura (apagadas ao fechar).
     page_keys: Vec<String>,
+    _subs: Vec<Subscription>,
 }
 
 impl EventEmitter<ReaderEvent> for ReaderView {}
 
 impl Focusable for ReaderView {
-    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+    fn focus_handle(&self, _: &gpui_kit::App) -> FocusHandle {
         self.focus.clone()
     }
 }
@@ -113,16 +124,15 @@ impl ReaderView {
         let state = state(cx);
         let core = state.read(cx).core.clone();
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         let data = core.reader().store.data();
         let prefs = data.prefs.get(&target.title_path).copied().unwrap_or_default();
-        let filter = cx.new(|cx| TextInput::new("Buscar capítulo ou volume", cx));
-        cx.subscribe(&filter, |_, _, e: &InputEvent, cx| {
-            if matches!(e, InputEvent::Changed) {
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Buscar capítulo ou volume"));
+        let subs = vec![cx.subscribe(&filter, |_, _, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::Change) {
                 cx.notify();
             }
-        })
-        .detach();
+        })];
         let start = join_path(&target.dir, &target.file.name);
         let mut this = Self {
             core,
@@ -146,6 +156,7 @@ impl ReaderView {
             stir_task: None,
             filter,
             page_keys: Vec::new(),
+            _subs: subs,
             target,
         };
         let i = this.index_of(&start).unwrap_or(0);
@@ -353,7 +364,7 @@ impl ReaderView {
                 let (w, h) = image::ImageReader::new(std::io::Cursor::new(b)).with_guessed_format().ok()?.into_dimensions().ok()?;
                 (h > 0).then(|| w as f32 / h as f32)
             });
-            let _ = state.update(cx, |s, cx| match r {
+            state.update(cx, |s, cx| match r {
                 Some((bytes, _)) => s.put_image(key.clone(), bytes, cx),
                 None => s.fail_image(&key, cx),
             });
@@ -590,9 +601,9 @@ impl ReaderView {
         let (o, max) = (self.scroll.offset(), self.scroll.max_offset());
         let b = self.scroll.bounds();
         let remaining = if self.prefs.mode == ReadMode::Long {
-            f32::from(max.height) + f32::from(o.y)
+            f32::from(max.y) + f32::from(o.y)
         } else {
-            f32::from(max.width) - f32::from(o.x).abs()
+            f32::from(max.x) - f32::from(o.x).abs()
         };
         let span = if self.prefs.mode == ReadMode::Long { f32::from(b.size.height) } else { f32::from(b.size.width) };
         let chapters = self.chapters();
@@ -614,26 +625,36 @@ impl ReaderView {
 
 // --- Desenho ---
 
-fn dots() -> gpui::Background {
-    theme::canvas().into()
+/// Largura das margens (lombada e número da página), em rem.
+const MARGIN_REM: f32 = 5.5;
+
+/// Cartão flutuante dos painéis: mesma superfície dos popovers do kit.
+fn panel(id: &'static str, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    v_flex()
+        .id(id)
+        .occlude()
+        .absolute()
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius_lg)
+        .shadow_lg()
+        .on_click(|_, _, cx| cx.stop_propagation())
 }
 
-fn margin_button(id: impl Into<gpui::ElementId>, active: bool) -> Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size_11()
-        .flex()
-        .items_center()
-        .justify_center()
-        .border_1()
-        .border_color(if active { theme::brand() } else { theme::line() })
-        .bg(theme::bg())
-        .cursor_pointer()
-        .hover(|d| d.border_color(theme::brand_ink()))
+fn panel_heading(text: &'static str, cx: &App) -> Div {
+    div().mb_2().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(cx.theme().foreground).child(text)
+}
+
+fn kbd(key: &'static str) -> Kbd {
+    Kbd::new(Keystroke::parse(key).expect("atalho válido"))
 }
 
 impl ReaderView {
     fn page_image(&self, u: &Unit, pg: usize, fit_height: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
         let key = page_key(u, pg);
         let found = self.state.read(cx).cached_image(&key);
         let ratio = self.ratios.get(&key).copied().unwrap_or(0.7);
@@ -644,45 +665,38 @@ impl ReaderView {
             }
             Some(Img::Failed) => {
                 let k = key.clone();
-                div()
-                    .min_h(px(240.))
-                    .flex()
-                    .flex_col()
+                v_flex()
+                    .min_h(rems(15.))
                     .items_center()
                     .justify_center()
                     .gap_3()
                     .p_6()
-                    .bg(theme::surface())
+                    .bg(theme.muted)
                     .text_sm()
-                    .when(fit_height, |d| d.h_full().w(px(400.)))
+                    .when(fit_height, |d| d.h_full().w(rems(25.)))
                     .when(!fit_height, |d| d.w_full())
                     .child("Esta página não carregou.")
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("retry-{key}")))
-                            .px_3()
-                            .py_1p5()
-                            .border_1()
-                            .border_color(theme::line_strong())
-                            .text_xs()
-                            .cursor_pointer()
-                            .hover(|d| d.border_color(theme::brand_ink()))
-                            .child("Tentar de novo")
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                cx.stop_propagation();
-                                v.retry_page(&k, cx);
-                            })),
-                    )
+                    .child(Button::new(SharedString::from(format!("retry:{key}"))).outline().small().label("Tentar de novo").on_click(cx.listener(
+                        move |v, _, _, cx| {
+                            cx.stop_propagation();
+                            v.retry_page(&k, cx);
+                        },
+                    )))
                     .into_any_element()
             }
             _ => {
-                let base = div().bg(theme::surface());
-                if fit_height { base.h_full().w(px(400.)).into_any_element() } else { base.w_full().h(px(800. / ratio)).into_any_element() }
+                if fit_height {
+                    Skeleton::new().h_full().w(rems(25.)).into_any_element()
+                } else {
+                    // A altura vem da proporção da página, não de uma medida fixa.
+                    Skeleton::new().w_full().h(px(800. / ratio)).into_any_element()
+                }
             }
         }
     }
 
     fn strip_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
         let long = self.prefs.mode == ReadMode::Long;
         let rtl_wide = !long && self.prefs.direction == Direction::Rtl;
         let chapters = self.chapters();
@@ -728,9 +742,9 @@ impl ReaderView {
                         self.want_page(&u, pg, index, cx);
                     }
                     let el = self.page_image(&u, pg, !long, cx);
-                    if long { div().w(px(800.)).max_w_full().flex_none().child(el).into_any_element() } else { div().h_full().flex_none().child(el).into_any_element() }
+                    if long { div().w(rems(50.)).max_w_full().flex_none().child(el).into_any_element() } else { div().h_full().flex_none().child(el).into_any_element() }
                 }
-                Item::Loading => div().p_10().text_color(theme::muted()).child("Carregando…").into_any_element(),
+                Item::Loading => div().p_10().child(Spinner::new()).into_any_element(),
                 Item::End(ch) => self.chapter_end(ch, cx),
                 Item::Seam(ch) => div()
                     .flex()
@@ -738,8 +752,8 @@ impl ReaderView {
                     .items_center()
                     .justify_center()
                     .text_sm()
-                    .text_color(theme::muted())
-                    .map(|d| if long { d.py_10() } else { d.w(px(160.)).h_full() })
+                    .text_color(theme.muted_foreground)
+                    .map(|d| if long { d.py_10() } else { d.w(rems(10.)).h_full() })
                     .child(label_text(&self.label(ch + 1)))
                     .into_any_element(),
             };
@@ -755,104 +769,76 @@ impl ReaderView {
 
     /// Cartão de fim de arquivo, com o próximo (ou o fim da pasta).
     fn chapter_end(&self, ch: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
         let next = ch + 1;
         let has = next < self.chapters().len();
-        let mut card = div()
-            .flex()
-            .flex_col()
+        let mut card = v_flex()
             .items_center()
             .justify_center()
             .gap_4()
             .p_10()
-            .when(self.prefs.mode == ReadMode::Wide, |d| d.h_full().w(px(320.)).flex_none())
-            .child(div().text_sm().text_color(theme::muted()).child(format!("Fim de {}", label_text(&self.label(ch)))));
+            .when(self.prefs.mode == ReadMode::Wide, |d| d.h_full().w(rems(20.)).flex_none())
+            .child(div().text_sm().text_color(theme.muted_foreground).child(format!("Fim de {}", label_text(&self.label(ch)))));
         if has {
             let label = label_text(&self.label(next));
-            card = card.child(div().text_3xl().font_weight(FontWeight::BLACK).child(label.clone())).child(
-                div()
-                    .flex()
+            card = card.child(div().text_3xl().font_weight(FontWeight::BOLD).child(label.clone())).child(
+                h_flex()
                     .gap_2()
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("read-next-{ch}")))
-                            .px_5()
-                            .py_2p5()
-                            .bg(theme::brand())
-                            .cursor_pointer()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("Ler {label}"))
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                cx.stop_propagation();
-                                let resume = v.resume_at(v.chapters().get(next));
-                                v.go_chapter(next, resume, cx);
-                            })),
-                    )
+                    .child(Button::new(SharedString::from(format!("read-next:{ch}"))).primary().label(format!("Ler {label}")).on_click(cx.listener(
+                        move |v, _, _, cx| {
+                            cx.stop_propagation();
+                            let resume = v.resume_at(v.chapters().get(next));
+                            v.go_chapter(next, resume, cx);
+                        },
+                    )))
                     .when(self.end, |d| {
-                        d.child(
-                            div()
-                                .id("stay")
-                                .px_4()
-                                .py_2p5()
-                                .border_1()
-                                .border_color(theme::line_strong())
-                                .cursor_pointer()
-                                .text_sm()
-                                .child("Ficar aqui")
-                                .on_click(cx.listener(|v, _, _, cx| {
-                                    cx.stop_propagation();
-                                    v.end = false;
-                                    cx.notify();
-                                })),
-                        )
+                        d.child(Button::new("stay").outline().label("Ficar aqui").on_click(cx.listener(|v, _, _, cx| {
+                            cx.stop_propagation();
+                            v.end = false;
+                            cx.notify();
+                        })))
                     }),
             );
         } else {
-            card = card.child(div().text_2xl().font_weight(FontWeight::BOLD).child("Último arquivo da pasta.")).child(
-                div()
-                    .id(SharedString::from(format!("back-title-{ch}")))
-                    .px_4()
-                    .py_2()
-                    .border_1()
-                    .border_color(theme::line_strong())
-                    .cursor_pointer()
-                    .text_sm()
-                    .child("Voltar ao título")
-                    .on_click(cx.listener(|v, _, window, cx| v.close(window, cx))),
+            card = card.child(div().text_xl().font_weight(FontWeight::BOLD).child("Último arquivo da pasta.")).child(
+                Button::new(SharedString::from(format!("back-title:{ch}"))).primary().label("Voltar ao título").on_click(cx.listener(|v, _, window, cx| v.close(window, cx))),
             );
         }
         card.into_any_element()
     }
 
-    fn thread(&self) -> impl IntoElement {
+    /// Fio de progresso: uma linha pontilhada com um estame por capítulo.
+    fn thread(&self, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
         let chapters = self.chapters();
         let count = chapters.len().max(1);
         let current = self.chapter();
         let rtl = self.prefs.direction == Direction::Rtl;
         let fraction = strip_progress(current, chapters.len(), self.page(), self.total()) as f32;
         let progress = self.core.reader().store.data().progress;
-        let side = |d: gpui::Div, at: gpui::DefiniteLength| if rtl { d.right(at) } else { d.left(at) };
+        let side = |d: Div, at: gpui_kit::DefiniteLength| if rtl { d.right(at) } else { d.left(at) };
         let mut t = div()
             .absolute()
             .bottom_0()
             .left_0()
             .right_0()
-            .h(px(40.))
-            .child(div().absolute().left_0().right_0().bottom(px(14.)).border_t_1().border_dashed().border_color(theme::white_a(0.2)))
-            .child(side(div().absolute().bottom(px(13.)).h(px(2.)).bg(theme::brand()).w(relative(fraction)), relative(0.)));
+            .h(rems(2.5))
+            .child(div().absolute().left_0().right_0().bottom(rems(0.875)).border_t_1().border_dashed().border_color(theme.border))
+            .child(side(div().absolute().bottom(rems(0.8)).h(rems(0.125)).bg(theme.primary).w(relative(fraction)), relative(0.)));
         if chapters.len() <= MAX_STAMENS {
             for (i, u) in chapters.iter().enumerate() {
                 let at = relative((i as f32 + 0.5) / count as f32);
                 let read = progress.get(&u.key).is_some_and(|p| p.read);
                 let (h, color) = if i == current {
-                    (20., theme::brand_ink())
+                    (1.25, theme.primary_ink())
                 } else if read {
-                    (12., theme::brand())
+                    (0.75, theme.primary)
                 } else {
-                    (12., theme::white_a(0.25))
+                    (0.75, theme.muted_foreground.opacity(0.5))
                 };
-                t = t.child(side(div().absolute().bottom(px(14.)).w(px(1.)).h(px(h)).bg(color), at)).child(side(
-                    div().absolute().bottom(px(14. + h - 3.)).ml(px(-2.)).size(px(if i == current { 7. } else { 5. })).rounded_full().bg(color),
+                let dot = if i == current { 0.45 } else { 0.3 };
+                t = t.child(side(div().absolute().bottom(rems(0.875)).w(px(1.)).h(rems(h)).bg(color), at)).child(side(
+                    div().absolute().bottom(rems(0.875 + h - 0.2)).ml(rems(-0.125)).size(rems(dot)).rounded_full().bg(color),
                     at,
                 ));
             }
@@ -861,7 +847,8 @@ impl ReaderView {
     }
 
     fn index_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let q = self.filter.read(cx).text().trim().to_lowercase();
+        let theme = cx.theme().clone();
+        let q = self.filter.read(cx).value().trim().to_lowercase();
         let chapters = self.chapters();
         let progress = self.core.reader().store.data().progress;
         let current = self.chapter();
@@ -877,66 +864,43 @@ impl ReaderView {
             .enumerate()
             .filter(|(_, u)| q.is_empty() || u.name.to_lowercase().contains(&q) || label_text(&chapter_label(&u.name)).to_lowercase().contains(&q))
             .collect();
-        div()
-            .id("index-panel")
-            .occlude()
-            .absolute()
-            .bottom(px(48.))
+        panel("index-panel", cx)
+            .bottom(rems(3.))
             .left_4()
-            .w(px(300.))
-            .max_h(px(520.))
-            .flex()
-            .flex_col()
-            .pt_4()
-            .pb_2()
-            .border_1()
-            .border_color(theme::line_strong())
-            .bg(theme::surface())
-            .shadow_lg()
-            .on_click(|_, _, cx| cx.stop_propagation())
+            .w(rems(19.))
+            .max_h(rems(32.))
+            .py_3()
+            .child(h_flex().mx_4().mb_2().items_baseline().justify_between().child(panel_heading("Índice", cx).mb_0()).child(div().text_xs().text_color(theme.muted_foreground).child(format!("{n} {word}"))))
+            .child(div().mx_4().mb_2().child(Input::new(&self.filter).small().prefix(Icon::new(IconName::Search).small()).cleanable(true)))
             .child(
-                div()
-                    .mx_4()
-                    .mb_2()
-                    .flex()
-                    .items_baseline()
-                    .justify_between()
-                    .child(div().font_weight(FontWeight::BOLD).child("Índice"))
-                    .child(div().text_xs().text_color(theme::muted()).child(format!("{n} {word}"))),
-            )
-            .child(div().mx_4().mb_2().px_3().py_2().border_1().border_color(theme::line()).bg(theme::bg()).child(self.filter.clone()))
-            .child(
-                div()
+                v_flex()
                     .id("index-list")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .when(items.is_empty(), |d| d.child(div().px_4().py_6().text_sm().text_color(theme::muted()).child("Nada com esse nome.")))
+                    .px_2()
+                    .when(items.is_empty(), |d| d.child(div().px_2().py_6().text_sm().text_color(theme.muted_foreground).child("Nada com esse nome.")))
                     .children(items.into_iter().map(|(i, u)| {
                         let l = chapter_label(&u.name);
                         let here = i == current;
                         let read = progress.get(&u.key).is_some_and(|p| p.read);
-                        div()
-                            .id(SharedString::from(format!("ix-{i}")))
-                            .flex()
-                            .items_center()
+                        h_flex()
+                            .id(SharedString::from(format!("chapter:{}", u.key)))
                             .gap_2()
-                            .px_4()
-                            .py_2()
-                            .cursor_pointer()
-                            .when(here, |d| d.bg(theme::accent_soft()))
-                            .hover(|d| d.bg(theme::white_a(0.06)))
+                            .px_2()
+                            .py_1p5()
+                            .rounded(theme.radius)
+                            .map(|d| if here { d.bg(theme.list_active) } else { d.hover(|s| s.bg(theme.list_hover)) })
                             .child(match &l.number {
-                                Some(num) => div()
-                                    .flex()
+                                Some(num) => h_flex()
                                     .items_baseline()
                                     .gap_1p5()
                                     .flex_1()
-                                    .child(div().text_xs().text_color(theme::muted()).child(l.kind))
-                                    .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(if here { theme::brand_ink() } else { theme::fg() }).child(num.clone())),
+                                    .child(div().text_xs().text_color(theme.muted_foreground).child(l.kind))
+                                    .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(if here { theme.primary_ink() } else { theme.foreground }).child(num.clone())),
                                 None => truncate(l.name.clone().unwrap_or_default()).flex_1().text_sm(),
                             })
-                            .when(read, |d| d.child(div().text_xs().text_color(theme::brand()).child("Lido")))
+                            .when(read, |d| d.child(h_flex().gap_1().text_xs().text_color(theme.muted_foreground).child(Icon::new(IconName::Check).xsmall()).child("Lido")))
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 let resume = v.resume_at(v.chapters().get(i));
                                 v.go_chapter(i, resume, cx);
@@ -948,35 +912,20 @@ impl ReaderView {
     fn pages_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let total = self.total();
         let current = self.page();
-        div()
-            .id("pages-panel")
-            .occlude()
-            .absolute()
+        panel("pages-panel", cx)
             .top_4()
             .right_4()
-            .w(px(320.))
-            .max_h(px(480.))
+            .w(rems(20.))
+            .max_h(rems(30.))
             .overflow_y_scroll()
             .p_4()
-            .border_1()
-            .border_color(theme::line_strong())
-            .bg(theme::surface())
-            .shadow_lg()
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(div().mb_3().font_weight(FontWeight::BOLD).child("Ir para a página"))
+            .child(panel_heading("Ir para a página", cx))
             .child(div().grid().grid_cols(6).gap_1().children((0..total).map(|pg| {
-                div()
-                    .id(SharedString::from(format!("pg-{pg}")))
-                    .h_9()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_1()
-                    .border_color(if pg == current { theme::brand() } else { theme::line() })
-                    .text_sm()
-                    .cursor_pointer()
-                    .hover(|d| d.border_color(theme::brand_ink()))
-                    .child((pg + 1).to_string())
+                Button::new(SharedString::from(format!("page:{pg}")))
+                    .ghost()
+                    .small()
+                    .selected(pg == current)
+                    .label((pg + 1).to_string())
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.panel = None;
                         if v.is_strip() {
@@ -993,146 +942,97 @@ impl ReaderView {
     }
 
     fn options_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let heading = |t: &'static str| div().mb_3().pb_2().border_b_1().border_color(theme::line()).font_weight(FontWeight::BOLD).child(t);
+        let theme = cx.theme().clone();
         let mode_label = |m: ReadMode| match m {
-            ReadMode::Single => ("rectangle-vertical", "Página única"),
-            ReadMode::Double => ("columns-2", "Página dupla"),
-            ReadMode::Long => ("arrow-down", "Long strip"),
-            ReadMode::Wide => ("arrow-right", "Wide strip"),
+            ReadMode::Single => (IconName::RectangleVertical, "Página única"),
+            ReadMode::Double => (IconName::Columns2, "Página dupla"),
+            ReadMode::Long => (IconName::ArrowDown, "Long strip"),
+            ReadMode::Wide => (IconName::ArrowRight, "Wide strip"),
         };
-        let seam = self.settings.seam;
-        div()
-            .id("options-panel")
-            .occlude()
-            .absolute()
+        const STYLES: [(ProgressStyle, &str, &str); 3] = [
+            (ProgressStyle::Thread, "Fio", "Linha com um estame em cada capítulo."),
+            (ProgressStyle::Number, "Só o número", "Número da página na margem, sem linha."),
+            (ProgressStyle::Hidden, "Escondido", "Leitura limpa. Aparece ao mover o mouse."),
+        ];
+        let style_ix = STYLES.iter().position(|(p, _, _)| *p == self.settings.progress).unwrap_or(0);
+        let dir_ix = if self.prefs.direction == Direction::Rtl { 0 } else { 1 };
+        let hint = |text: &'static str| div().mt_2().text_xs().text_color(theme.muted_foreground).child(text);
+        panel("options-panel", cx)
             .top_4()
             .right_4()
-            .w(px(760.))
+            .w(rems(47.5))
             .p_6()
-            .flex()
-            .flex_col()
             .gap_6()
-            .border_1()
-            .border_color(theme::line_strong())
-            .bg(theme::surface())
-            .shadow_lg()
-            .on_click(|_, _, cx| cx.stop_propagation())
             .child(
-                div()
-                    .flex()
-                    .gap_7()
+                h_flex()
+                    .items_start()
+                    .gap_6()
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
-                            .child(heading("Modo"))
-                            .child(div().grid().grid_cols(4).gap_2().children(MODES.map(|m| {
+                            .child(panel_heading("Modo", cx))
+                            .child(h_flex().gap_2().children(MODES.map(|m| {
                                 let (ic, label) = mode_label(m);
-                                let on = self.prefs.mode == m;
-                                div()
-                                    .id(SharedString::from(format!("mode-{label}")))
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap_2p5()
-                                    .px_1p5()
-                                    .pt_3()
-                                    .pb_2p5()
-                                    .border_1()
-                                    .border_color(if on { theme::brand() } else { theme::line() })
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(if on { theme::fg() } else { theme::muted() })
-                                    .child(icon(ic).size_6().text_color(if on { theme::brand_ink() } else { theme::white_a(0.45) }))
-                                    .child(label)
+                                Button::new(SharedString::from(format!("mode:{label}")))
+                                    .outline()
+                                    .small()
+                                    .icon(ic)
+                                    .label(label)
+                                    .selected(self.prefs.mode == m)
                                     .on_click(cx.listener(move |v, _, _, cx| v.set_mode(m, cx)))
                             })))
                             .child(
-                                div()
-                                    .id("seam")
-                                    .mt_5()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .cursor_pointer()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_sm()
-                                            .child("Emendar capítulos")
-                                            .child(div().text_xs().text_color(theme::muted()).child("Ao terminar, o próximo vem logo em seguida, sem sair do leitor.")),
-                                    )
-                                    .child(
-                                        div()
-                                            .relative()
-                                            .flex_none()
-                                            .w(px(38.))
-                                            .h(px(22.))
-                                            .bg(if seam { theme::brand() } else { theme::white_a(0.15) })
-                                            .child(div().absolute().top(px(3.)).left(px(if seam { 19. } else { 3. })).size_4().bg(theme::white())),
-                                    )
-                                    .on_click(cx.listener(|v, _, _, cx| v.set_settings(|s| s.seam = !s.seam, cx))),
+                                v_flex().mt_5().gap_1().child(Switch::new("seam").label("Emendar capítulos").checked(self.settings.seam).on_change(cx.listener(
+                                    |v, on: &bool, _, cx| {
+                                        let on = *on;
+                                        v.set_settings(|s| s.seam = on, cx);
+                                    },
+                                ))).child(div().pl_7().text_xs().text_color(theme.muted_foreground).child("Ao terminar, o próximo vem logo em seguida, sem sair do leitor.")),
                             ),
                     )
                     .child(
-                        div()
-                            .w(px(200.))
-                            .child(heading("Direção"))
-                            .child(div().flex().border_1().border_color(theme::line()).children([(Direction::Rtl, "Direita → esquerda"), (Direction::Ltr, "Esquerda → direita")].map(|(d, label)| {
-                                let on = self.prefs.direction == d;
-                                div()
-                                    .id(label)
-                                    .flex_1()
-                                    .px_2()
-                                    .py_3()
-                                    .flex()
-                                    .justify_center()
-                                    .text_xs()
-                                    .cursor_pointer()
-                                    .when(on, |x| x.bg(theme::brand()).font_weight(FontWeight::SEMIBOLD))
-                                    .when(!on, |x| x.text_color(theme::muted()))
-                                    .child(label)
-                                    .on_click(cx.listener(move |v, _, _, cx| v.set_direction(d, cx)))
-                            })))
-                            .child(div().mt_2().text_xs().text_color(theme::muted()).child("Lembrada para este título. Títulos novos começam da direita para a esquerda.")),
+                        v_flex()
+                            .w(rems(12.5))
+                            .child(panel_heading("Direção", cx))
+                            .child(RadioGroup::vertical("direction").children(["Direita → esquerda", "Esquerda → direita"]).selected_index(Some(dir_ix)).on_change(cx.listener(
+                                |v, ix: &usize, _, cx| v.set_direction(if *ix == 0 { Direction::Rtl } else { Direction::Ltr }, cx),
+                            )))
+                            .child(hint("Lembrada para este título. Títulos novos começam da direita para a esquerda.")),
                     )
                     .child(
-                        div()
-                            .w(px(220.))
-                            .child(heading("Progresso"))
-                            .child(div().flex().flex_col().gap_2().children([
-                                (ProgressStyle::Thread, "Fio", "Linha vermelha com um estame em cada capítulo"),
-                                (ProgressStyle::Number, "Só o número", "Número da página na margem, sem linha"),
-                                (ProgressStyle::Hidden, "Escondido", "Leitura limpa. Aparece ao mover o mouse."),
-                            ]
-                            .map(|(p, label, hint)| {
-                                let on = self.settings.progress == p;
-                                div()
-                                    .id(label)
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .px_3()
-                                    .py_2p5()
-                                    .border_1()
-                                    .border_color(if on { theme::brand() } else { theme::line() })
-                                    .cursor_pointer()
-                                    .child(div().flex_1().text_sm().child(label).child(div().text_xs().text_color(theme::muted()).child(hint)))
-                                    .child(div().size_3p5().flex_none().rounded_full().border_1().border_color(if on { theme::brand() } else { theme::white_a(0.35) }).when(on, |d| d.bg(theme::brand())))
-                                    .on_click(cx.listener(move |v, _, _, cx| v.set_settings(|s| s.progress = p, cx)))
-                            }))),
+                        v_flex()
+                            .w(rems(13.75))
+                            .child(panel_heading("Progresso", cx))
+                            .child(RadioGroup::vertical("progress-style").children(STYLES.map(|(_, label, _)| label)).selected_index(Some(style_ix)).on_change(cx.listener(
+                                |v, ix: &usize, _, cx| {
+                                    let p = STYLES[*ix].0;
+                                    v.set_settings(|s| s.progress = p, cx);
+                                },
+                            )))
+                            .child(hint(STYLES[style_ix].2)),
                     ),
             )
-            .child(
-                div().flex().flex_wrap().gap_x_5().gap_y_2().pt_3p5().border_t_1().border_color(theme::line()).text_xs().text_color(theme::muted()).children(
-                    [("← →", "virar a página"), ("[ ]", "capítulo anterior / próximo"), ("G", "índice"), ("D", "trocar direção"), ("M", "trocar modo"), ("F", "tela cheia"), ("Esc", "fechar")]
-                        .map(|(k, what)| div().flex().gap_1p5().child(div().px_1().border_1().border_color(theme::line()).text_color(theme::fg()).child(k)).child(what)),
-                ),
-            )
+            .child(Divider::horizontal())
+            .child(h_flex().flex_wrap().gap_x_5().gap_y_2().text_xs().text_color(theme.muted_foreground).children(
+                [
+                    (vec!["left", "right"], "virar a página"),
+                    (vec!["[", "]"], "capítulo anterior / próximo"),
+                    (vec!["g"], "índice"),
+                    (vec!["d"], "trocar direção"),
+                    (vec!["m"], "trocar modo"),
+                    (vec!["f"], "tela cheia"),
+                    (vec!["escape"], "fechar"),
+                ]
+                .into_iter()
+                .map(|(keys, what)| h_flex().gap_1p5().children(keys.into_iter().map(kbd)).child(what)),
+            ))
     }
 }
 
 impl Render for ReaderView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let margin = rems(MARGIN_REM);
         let chapter = self.chapter();
         let label = self.label(chapter);
         let total = self.total();
@@ -1153,64 +1053,44 @@ impl Render for ReaderView {
         let body: AnyElement = match (&current, total) {
             (Some(Opened::Error(msg)), _) => {
                 let msg = msg.clone();
-                div()
+                let download = match unit.as_ref().and_then(|u| self.state.read(cx).download(&u.path)).map(|d| d.status) {
+                    Some(DlStatus::Done) => "Baixado",
+                    Some(DlStatus::Running | DlStatus::Queued) => "Baixando…",
+                    _ => "Baixar",
+                };
+                v_flex()
                     .size_full()
-                    .flex()
                     .items_center()
                     .justify_center()
                     .child(
-                        div()
-                            .max_w(px(380.))
-                            .flex()
-                            .flex_col()
+                        v_flex()
+                            .max_w(rems(24.))
                             .items_center()
                             .gap_3()
                             .child(div().text_lg().font_weight(FontWeight::BOLD).child("Não deu para abrir este arquivo."))
-                            .child(div().text_sm().text_color(theme::muted()).child(msg))
+                            .child(div().text_sm().text_color(theme.muted_foreground).child(msg))
                             .child(
-                                div()
+                                h_flex()
                                     .mt_2()
-                                    .flex()
                                     .gap_2()
-                                    .child(div().id("retry-open").px_4().py_2().bg(theme::brand()).cursor_pointer().text_sm().font_weight(FontWeight::SEMIBOLD).child("Tentar de novo").on_click(cx.listener(
-                                        |v, _, _, cx| {
-                                            cx.stop_propagation();
-                                            if let Some(u) = v.unit() {
-                                                v.opened.remove(&open_key(&u));
-                                                v.ensure(Some(u), cx);
-                                            }
-                                        },
-                                    )))
-                                    .child(
-                                        div()
-                                            .id("download-file")
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .px_4()
-                                            .py_2()
-                                            .border_1()
-                                            .border_color(theme::line_strong())
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .child(icon("download").size_4())
-                                            .child(match unit.as_ref().and_then(|u| self.state.read(cx).download(&u.path)).map(|d| d.status) {
-                                                Some(DlStatus::Done) => "Baixado",
-                                                Some(DlStatus::Running | DlStatus::Queued) => "Baixando…",
-                                                _ => "Baixar",
-                                            })
-                                            .on_click(cx.listener(|v, _, _, cx| {
-                                                cx.stop_propagation();
-                                                if let Some(u) = v.unit() {
-                                                    v.state.update(cx, |s, cx| s.start_downloads(std::slice::from_ref(&u.path), cx));
-                                                }
-                                            })),
-                                    ),
+                                    .child(Button::new("retry-open").primary().label("Tentar de novo").on_click(cx.listener(|v, _, _, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(u) = v.unit() {
+                                            v.opened.remove(&open_key(&u));
+                                            v.ensure(Some(u), cx);
+                                        }
+                                    })))
+                                    .child(Button::new("download-file").outline().icon(IconName::Download).label(download).on_click(cx.listener(|v, _, _, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(u) = v.unit() {
+                                            v.state.update(cx, |s, cx| s.start_downloads(std::slice::from_ref(&u.path), cx));
+                                        }
+                                    }))),
                             ),
                     )
                     .into_any_element()
             }
-            (_, 0) => div().size_full().flex().items_center().justify_center().child(div().w(px(380.)).h(relative(0.78)).bg(theme::surface())).into_any_element(),
+            (_, 0) => div().size_full().flex().items_center().justify_center().child(Skeleton::new().w(rems(23.75)).h(relative(0.78))).into_any_element(),
             _ if self.is_strip() => self.strip_view(cx),
             _ => {
                 let u = unit.clone().unwrap();
@@ -1233,55 +1113,40 @@ impl Render for ReaderView {
         };
 
         let spine_title: Vec<char> = self.target.title.chars().take(28).collect();
-        div()
+        let kind = if label.kind.is_empty() { "ARQ." } else { label.kind };
+        v_flex()
             .id("reader")
             .track_focus(&self.focus)
             .key_context("Reader")
             .size_full()
-            .flex()
-            .flex_col()
-            .bg(theme::bg())
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .on_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|v, _, _, cx| v.stir(cx)))
-            .when(!fullscreen, |d| {
-                d.child(
-                    div()
-                        .h_8()
-                        .flex_none()
-                        .flex()
-                        .border_b_1()
-                        .border_color(theme::line())
-                        .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
-                        .child(window_controls(window)),
-                )
-            })
+            .when(!fullscreen, |d| d.child(TitleBar::new().child(div().pl_3().text_sm().text_color(theme.muted_foreground).child(self.target.title.clone()))))
             .child(
-                div()
-                    .flex()
+                h_flex()
                     .flex_1()
                     .min_h_0()
+                    .items_stretch()
                     // Lombada: voltar, título vertical, número do capítulo
                     .child(
-                        div()
-                            .w(px(88.))
+                        v_flex()
+                            .w(margin)
                             .flex_none()
                             .border_r_1()
-                            .border_color(theme::line())
-                            .bg(dots())
+                            .border_color(theme.border)
+                            .bg(theme.group_box)
                             .pt_5()
                             .pb_11()
-                            .flex()
-                            .flex_col()
                             .items_center()
                             .gap_5()
-                            .child(margin_button("back", false).child(icon("chevron-left")).on_click(cx.listener(|v, _, window, cx| v.close(window, cx))))
+                            .child(Button::new("back").outline().icon(IconName::ChevronLeft).tooltip("Voltar (Esc)").on_click(cx.listener(|v, _, window, cx| v.close(window, cx))))
                             .child(
-                                div()
+                                v_flex()
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_hidden()
-                                    .flex()
-                                    .flex_col()
                                     .items_center()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
@@ -1289,21 +1154,20 @@ impl Render for ReaderView {
                                     .children(spine_title.into_iter().map(|c| div().child(c.to_string()))),
                             )
                             .child(
-                                div()
+                                v_flex()
                                     .id("chapter-number")
-                                    .flex()
-                                    .flex_col()
                                     .items_center()
                                     .px_1p5()
                                     .py_1()
-                                    .cursor_pointer()
-                                    .child(div().text_size(px(11.)).text_color(theme::muted()).child(if label.kind.is_empty() { "ARQ." } else { label.kind }.to_uppercase()))
+                                    .rounded(theme.radius)
+                                    .hover(|d| d.bg(theme.list_hover))
+                                    .child(div().text_xs().text_color(theme.muted_foreground).child(kind.to_uppercase()))
                                     .child(
                                         div()
-                                            .text_size(px(if num.len() > 3 { 30. } else { 44. }))
+                                            .text_size(rems(if num.len() > 3 { 1.875 } else { 2.75 }))
                                             .line_height(relative(1.))
                                             .font_weight(FontWeight::BLACK)
-                                            .text_color(if self.panel == Some(Panel::Index) { theme::brand() } else { theme::brand_ink() })
+                                            .text_color(if self.panel == Some(Panel::Index) { theme.primary } else { theme.primary_ink() })
                                             .child(num),
                                     )
                                     .on_click(cx.listener(|v, _, _, cx| {
@@ -1320,7 +1184,7 @@ impl Render for ReaderView {
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
-                            .on_click(cx.listener(|v, e: &ClickEvent, window, cx| {
+                            .on_click(cx.listener(move |v, e: &ClickEvent, window, cx| {
                                 if v.panel.is_some() {
                                     v.panel = None;
                                     cx.notify();
@@ -1334,8 +1198,9 @@ impl Render for ReaderView {
                                     return;
                                 }
                                 // Clique nas laterais vira a página (respeitando a direção); no meio, nada.
+                                let edge = MARGIN_REM * f32::from(window.rem_size());
                                 let w = f32::from(window.viewport_size().width);
-                                let x = (f32::from(e.position().x) - 88.) / (w - 176.).max(1.);
+                                let x = (f32::from(e.position().x) - edge) / (w - edge * 2.).max(1.);
                                 let rtl = v.prefs.direction == Direction::Rtl;
                                 if x < 0.4 {
                                     if rtl { v.next(cx) } else { v.prev(cx) }
@@ -1345,64 +1210,57 @@ impl Render for ReaderView {
                             }))
                             .child(body)
                             .when(self.end && !self.is_strip(), |d| {
-                                d.child(div().absolute().inset_0().bg(gpui::Rgba { a: 0.85, ..theme::bg() }).flex().items_center().justify_center().child(self.chapter_end(chapter, cx)))
+                                d.child(div().absolute().inset_0().bg(theme.background.opacity(0.85)).flex().items_center().justify_center().child(self.chapter_end(chapter, cx)))
                             })
-                            .when(show_thread, |d| d.child(self.thread()))
+                            .when(show_thread, |d| d.child(self.thread(cx)))
                             .when(self.panel == Some(Panel::Index), |d| d.child(self.index_panel(cx)))
                             .when(self.panel == Some(Panel::Pages) && total > 0, |d| d.child(self.pages_panel(cx)))
                             .when(self.panel == Some(Panel::Options), |d| d.child(self.options_panel(cx))),
                     )
                     // Margem direita: número da página, opções, direção
                     .child(
-                        div()
-                            .w(px(88.))
+                        v_flex()
+                            .w(margin)
                             .flex_none()
                             .border_l_1()
-                            .border_color(theme::line())
-                            .bg(dots())
+                            .border_color(theme.border)
+                            .bg(theme.group_box)
                             .pt_5()
                             .pb_11()
-                            .flex()
-                            .flex_col()
                             .items_center()
                             .gap_3p5()
                             .child(
-                                div()
+                                v_flex()
                                     .id("page-number")
-                                    .flex()
-                                    .flex_col()
                                     .items_center()
                                     .px_1()
-                                    .cursor_pointer()
+                                    .rounded(theme.radius)
+                                    .hover(|d| d.bg(theme.list_hover))
                                     .when(!show_number, |d| d.opacity(0.))
-                                    .child(div().text_size(px(if page_text.len() > 3 { 22. } else { 40. })).line_height(relative(1.)).font_weight(FontWeight::BLACK).child(page_text))
-                                    .child(div().mt_1().text_xs().text_color(theme::muted()).child(format!("de {}", if total > 0 { total.to_string() } else { "—".into() })))
+                                    .child(div().text_size(rems(if page_text.len() > 3 { 1.375 } else { 2.5 })).line_height(relative(1.)).font_weight(FontWeight::BLACK).child(page_text))
+                                    .child(div().mt_1().text_xs().text_color(theme.muted_foreground).child(format!("de {}", if total > 0 { total.to_string() } else { "—".into() })))
                                     .on_click(cx.listener(|v, _, _, cx| {
                                         v.toggle(Panel::Pages);
                                         cx.notify();
                                     })),
                             )
-                            .child(margin_button("options", self.panel == Some(Panel::Options)).child(icon("sliders-horizontal").size_4()).on_click(cx.listener(|v, _, _, cx| {
-                                v.toggle(Panel::Options);
-                                cx.notify();
-                            })))
+                            .child(
+                                Button::new("options")
+                                    .outline()
+                                    .icon(IconName::SlidersHorizontal)
+                                    .selected(self.panel == Some(Panel::Options))
+                                    .tooltip("Opções de leitura")
+                                    .on_click(cx.listener(|v, _, _, cx| {
+                                        v.toggle(Panel::Options);
+                                        cx.notify();
+                                    })),
+                            )
                             .child(div().flex_1())
                             .child(
-                                div()
-                                    .id("direction")
-                                    .w_11()
-                                    .py_3()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .border_1()
-                                    .border_color(theme::line())
-                                    .bg(theme::bg())
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(theme::brand_ink())
-                                    .hover(|d| d.border_color(theme::brand_ink()))
-                                    .children(if rtl { ["DIR", "←", "ESQ"] } else { ["ESQ", "→", "DIR"] }.map(|s| div().child(s)))
+                                Button::new("direction")
+                                    .outline()
+                                    .icon(if rtl { IconName::ArrowLeft } else { IconName::ArrowRight })
+                                    .tooltip(if rtl { "Lendo da direita para a esquerda (D)" } else { "Lendo da esquerda para a direita (D)" })
                                     .on_click(cx.listener(|v, _, _, cx| {
                                         let d = if v.prefs.direction == Direction::Rtl { Direction::Ltr } else { Direction::Rtl };
                                         v.set_direction(d, cx);

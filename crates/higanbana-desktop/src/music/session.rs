@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::Context;
+use gpui_kit::Context;
 use higanbana_core::music::{
     TrackMeta,
     album::{Album, Track},

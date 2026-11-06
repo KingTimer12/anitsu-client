@@ -14,7 +14,7 @@ mod imp {
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, HWND_BOTTOM, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
-            SWP_NOACTIVATE, SetWindowPos, ShowWindow, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+            SWP_NOACTIVATE, SetWindowPos, ShowCursor, ShowWindow, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
             WS_DISABLED,
         },
     };
@@ -49,6 +49,7 @@ mod imp {
     pub struct Surface {
         hwnd: HWND,
         last: std::cell::Cell<(i32, i32, i32, i32, bool)>,
+        cursor_hidden: std::cell::Cell<bool>,
     }
 
     impl Surface {
@@ -71,7 +72,7 @@ mod imp {
                     std::ptr::null(),
                 )
             };
-            (!hwnd.is_null()).then(|| Self { hwnd, last: std::cell::Cell::new((0, 0, 0, 0, false)) })
+            (!hwnd.is_null()).then(|| Self { hwnd, last: std::cell::Cell::new((0, 0, 0, 0, false)), cursor_hidden: std::cell::Cell::new(false) })
         }
 
         pub fn wid(&self) -> usize {
@@ -95,7 +96,18 @@ mod imp {
             }
         }
 
+        /// Esconde o cursor do sistema sobre o vídeo parado de mexer. O GPUI não
+        /// tem um estilo de cursor vazio; `ShowCursor` usa um contador por thread,
+        /// então só chamamos quando o estado muda, para ele voltar ao equilíbrio.
+        pub fn set_cursor_hidden(&self, hidden: bool) {
+            if self.cursor_hidden.replace(hidden) != hidden {
+                // SAFETY: chamada na thread da interface, sempre em pares.
+                unsafe { ShowCursor(if hidden { 0 } else { 1 }) };
+            }
+        }
+
         pub fn hide(&self) {
+            self.set_cursor_hidden(false);
             let mut l = self.last.get();
             if l.4 {
                 l.4 = false;
@@ -119,6 +131,7 @@ mod imp {
         }
         pub fn place(&self, _x: i32, _y: i32, _w: i32, _h: i32) {}
         pub fn hide(&self) {}
+        pub fn set_cursor_hidden(&self, _hidden: bool) {}
     }
 }
 

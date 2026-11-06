@@ -1,80 +1,65 @@
-//! Cores do higanbana (as mesmas de `src/styles/app.css` do frontend web).
+//! Tema do higanbana: as cores ficam em `themes/higanbana.json` (formato de tema
+//! do GPUI Kit) e as telas leem tudo de `cx.theme()` pelo papel da cor.
+//!
+//! Aqui ficam só os poucos papéis que o tema do kit não tem:
+//! - a tinta da marca para texto (vermelho claro legível no fundo escuro);
+//! - as cores sobre mídia (vídeo, capas e banners), que não seguem o tema
+//!   porque o fundo é a própria imagem.
 
-use gpui::{Rgba, rgb, rgba};
+use std::rc::Rc;
 
-pub fn bg() -> Rgba {
-    rgb(0x07070a)
+use gpui_kit::{
+    App, Hsla, Window,
+    component::{Theme, ThemeSet},
+};
+
+const THEME: &str = include_str!("../themes/higanbana.json");
+
+/// Instala o tema escuro do higanbana. Chamar logo depois de `gpui_kit::init`.
+pub fn install(cx: &mut App) {
+    let set: ThemeSet = serde_json::from_str(THEME).expect("themes/higanbana.json válido");
+    let config = Rc::new(set.themes.into_iter().next().expect("um tema em higanbana.json"));
+    Theme::update(cx, |theme| theme.apply_config(&config));
 }
 
-pub fn canvas() -> Rgba {
-    rgb(0x0b0b10)
+/// Papéis do produto que o tema do kit não nomeia.
+pub trait ProductColors {
+    /// Texto na cor da marca (rótulos ativos, número da faixa tocando).
+    fn primary_ink(&self) -> Hsla;
 }
 
-pub fn surface() -> Rgba {
-    rgb(0x111118)
+impl ProductColors for Theme {
+    fn primary_ink(&self) -> Hsla {
+        // `base.red.light` no arquivo do tema.
+        self.red_light
+    }
 }
 
-pub fn elevated() -> Rgba {
-    rgb(0x18181f)
+/// Texto e ícones sobre vídeo, capa ou banner: sempre claros.
+pub fn on_media() -> Hsla {
+    gpui_kit::white()
 }
 
-pub fn line() -> Rgba {
-    white_a(0.08)
+/// Texto secundário sobre mídia.
+pub fn on_media_muted() -> Hsla {
+    gpui_kit::white().opacity(0.72)
 }
 
-pub fn line_strong() -> Rgba {
-    white_a(0.14)
+/// Véu escuro sobre mídia, para o texto ficar legível.
+pub fn media_scrim(alpha: f32) -> Hsla {
+    gpui_kit::black().opacity(alpha)
 }
 
-pub fn fg() -> Rgba {
-    rgb(0xededef)
+/// Trilho claro sobre mídia (barra de posição, volume).
+pub fn media_track(alpha: f32) -> Hsla {
+    gpui_kit::white().opacity(alpha)
 }
 
-pub fn muted() -> Rgba {
-    rgb(0x9a9ea8)
-}
-
-pub fn faint() -> Rgba {
-    rgb(0x767b85)
-}
-
-pub fn brand() -> Rgba {
-    rgb(0xe8283c)
-}
-
-pub fn brand_ink() -> Rgba {
-    rgb(0xff7a85)
-}
-
-/// Destaque das telas (no web, vinha da cor da capa; aqui, a da marca).
-pub fn accent() -> Rgba {
-    brand()
-}
-
-pub fn accent_ink() -> Rgba {
-    brand_ink()
-}
-
-pub fn accent_soft() -> Rgba {
-    rgba(0xe8283c26)
-}
-
-pub fn danger() -> Rgba {
-    rgb(0xf87171)
-}
-
-pub fn ok() -> Rgba {
-    rgb(0x4ade80)
-}
-
-pub fn white() -> Rgba {
-    rgb(0xffffff)
-}
-
-pub fn white_a(a: f32) -> Rgba {
-    Rgba { r: 1.0, g: 1.0, b: 1.0, a }
-}
-
-pub fn black_a(a: f32) -> Rgba {
-    Rgba { r: 0.0, g: 0.0, b: 0.0, a }
+/// O vídeo é uma janela nativa embaixo da composição do GPUI: com o player
+/// aberto o `Root` não pode pintar o fundo, senão cobre o vídeo. Só o token de
+/// fundo do `Root` muda (as cores do tema ficam iguais) e volta ao fechar.
+pub fn set_video_backdrop(on: bool, window: &mut Window, cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    theme.tokens.background = if on { gpui_kit::transparent_black().into() } else { theme.colors.background.into() };
+    window.refresh();
 }

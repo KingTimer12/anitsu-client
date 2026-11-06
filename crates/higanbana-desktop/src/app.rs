@@ -1,30 +1,33 @@
-//! Raiz da janela: moldura + tela atual, ou o player/leitor por cima de tudo.
+//! Raiz da janela: barra de título + barra lateral + tela atual, ou o
+//! player/leitor ocupando a janela inteira.
 
 use std::{rc::Rc, sync::Arc};
 
 use futures::{StreamExt, channel::mpsc::UnboundedReceiver};
-use gpui::{
-    AnyView, AnyWindowHandle, Context, Entity, FontWeight, IntoElement, KeyBinding, MouseButton, NavigationDirection,
-    ParentElement, Render, Styled, Subscription, Window, WindowControlArea, actions, div, prelude::*, px,
+use gpui_kit::{
+    AnyView, AnyWindowHandle, Context, Entity, IntoElement, KeyBinding, MouseButton, NavigationDirection,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, actions, div, prelude::*,
+};
+use gpui_kit::component::{
+    ActiveTheme as _, WindowExt as _, h_flex, v_flex,
+    notification::{Notification, NotificationType},
 };
 use higanbana_core::{Core, Event, library::{Place, classify}};
 
 use crate::{
-    chrome::{DownloadsMenu, SearchBox, Sidebar, toasts, window_controls},
+    chrome::{SearchPalette, sidebar, sort_sections, title_bar},
     music::bar::MusicBar,
     reader::{ReadTarget, ReaderEvent, ReaderView},
-    state::{AppEvent, AppState, state},
-    theme,
-    ui::icon_button,
+    state::{AppEvent, AppState, Tone, state},
     video::{PlayTarget, PlayerEvent, PlayerView, Surface},
     views::{folder::FolderView, home::HomeView, login::LoginView, shelf::ShelfView, title::TitleView},
 };
 
-actions!(higanbana, [FocusSearch, Back, Forward]);
+actions!(higanbana, [OpenSearch, Back, Forward]);
 
-pub fn bind_keys(cx: &mut gpui::App) {
+pub fn bind_keys(cx: &mut gpui_kit::App) {
     cx.bind_keys([
-        KeyBinding::new("ctrl-k", FocusSearch, None),
+        KeyBinding::new("ctrl-k", OpenSearch, None),
         KeyBinding::new("alt-left", Back, None),
         KeyBinding::new("alt-right", Forward, None),
     ]);
@@ -35,9 +38,8 @@ pub struct AppView {
     surface: Rc<Surface>,
     page: Option<(String, AnyView)>,
     login: Option<Entity<LoginView>>,
-    search: Entity<SearchBox>,
-    downloads: Entity<DownloadsMenu>,
-    sidebar: Entity<Sidebar>,
+    palette: Entity<SearchPalette>,
+    sections: Vec<String>,
     music: Entity<MusicBar>,
     player: Option<(Entity<PlayerView>, Subscription)>,
     reader: Option<(Entity<ReaderView>, Subscription)>,
@@ -53,6 +55,14 @@ impl AppView {
             cx.subscribe_in(&state, window, |this, _, e: &AppEvent, window, cx| match e {
                 AppEvent::Play(t) => this.play(t.clone(), window, cx),
                 AppEvent::Read(t) => this.read(t.clone(), window, cx),
+                AppEvent::Notify(tone, message) => {
+                    let kind = match tone {
+                        Tone::Info => NotificationType::Info,
+                        Tone::Ok => NotificationType::Success,
+                        Tone::Error => NotificationType::Error,
+                    };
+                    window.push_notification(Notification::new().message(message.clone()).with_type(kind), cx);
+                }
                 AppEvent::Navigated => {}
             }),
         ];
@@ -61,7 +71,7 @@ impl AppView {
         let st = state.clone();
         cx.spawn(async move |_, cx| {
             while let Some(e) = events.next().await {
-                let _ = st.update(cx, |s, cx| match &e {
+                st.update(cx, |s, cx| match &e {
                     Event::AuthChanged(session) => s.set_session(session.as_ref(), cx),
                     Event::DownloadProgress(p) => s.on_download_progress(p, cx),
                     Event::MusicState(m) => s.on_music_state(m.clone(), cx),
@@ -74,11 +84,15 @@ impl AppView {
         })
         .detach();
 
+        crate::views::load_listing(&state, String::new(), cx, |v: &mut Self, r, _| {
+            let names = r.map(|f| f.into_iter().filter(|f| f.is_directory).map(|f| f.name).collect()).unwrap_or_default();
+            v.sections = sort_sections(names);
+        });
+
         Self {
-            search: cx.new(SearchBox::new),
-            downloads: cx.new(DownloadsMenu::new),
-            sidebar: cx.new(Sidebar::new),
-            music: cx.new(MusicBar::new),
+            palette: cx.new(|cx| SearchPalette::new(window, cx)),
+            music: cx.new(|cx| MusicBar::new(window, cx)),
+            sections: Vec::new(),
             state,
             surface,
             page: None,
@@ -94,9 +108,11 @@ impl AppView {
         // Música e vídeo não tocam juntos.
         let _ = core.music().command("pause");
         let surface = self.surface.clone();
+        crate::theme::set_video_backdrop(true, window, cx);
         let player = cx.new(|cx| PlayerView::new(core, target, surface, window, cx));
-        let sub = cx.subscribe_in(&player, window, |this, _, e: &PlayerEvent, _, cx| match e {
+        let sub = cx.subscribe_in(&player, window, |this, _, e: &PlayerEvent, window, cx| match e {
             PlayerEvent::Close => {
+                crate::theme::set_video_backdrop(false, window, cx);
                 this.player = None;
                 this.state.update(cx, |s, cx| s.refresh_player_data(cx));
                 cx.notify();
@@ -119,7 +135,7 @@ impl AppView {
     }
 
     /// Tela da rota atual (recriada quando o caminho muda).
-    fn page(&mut self, cx: &mut Context<Self>) -> AnyView {
+    fn page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyView {
         let path = self.state.read(cx).path().to_owned();
         if let Some((p, v)) = &self.page
             && *p == path
@@ -128,156 +144,86 @@ impl AppView {
         }
         let view: AnyView = match classify(&path) {
             Place::Home => cx.new(HomeView::new).into(),
-            Place::Shelf { path, media } => cx.new(|cx| ShelfView::new(path, media, cx)).into(),
+            Place::Shelf { path, media } => cx.new(|cx| ShelfView::new(path, media, window, cx)).into(),
             Place::Title { title_path, rest, media, .. } => cx.new(|cx| TitleView::new(title_path, rest, media, cx)).into(),
             Place::Folder { path } => cx.new(|cx| FolderView::new(path, cx)).into(),
         };
         self.page = Some((path, view.clone()));
         view
     }
+
+    fn render_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let page = self.page(window, cx);
+        let has_music = self.state.read(cx).music.as_ref().is_some_and(|m| m.album.is_some());
+        let path_key = self.state.read(cx).path().to_owned();
+        let st = self.state.clone();
+        let nav = move |back: bool| {
+            let st = st.clone();
+            move |_: &gpui_kit::MouseUpEvent, _: &mut Window, cx: &mut gpui_kit::App| st.update(cx, |s, cx| if back { s.back(cx) } else { s.forward(cx) })
+        };
+        v_flex()
+            .size_full()
+            .on_mouse_up(MouseButton::Navigate(NavigationDirection::Back), nav(true))
+            .on_mouse_up(MouseButton::Navigate(NavigationDirection::Forward), nav(false))
+            .child(title_bar(&self.state, &self.palette, cx))
+            .child(
+                h_flex()
+                    .items_stretch()
+                    .flex_1()
+                    .min_h_0()
+                    .child(sidebar(&self.state, &self.sections, cx))
+                    .child(
+                        // Uma área rolável por rota: a posição volta ao topo ao navegar.
+                        div()
+                            .id(SharedString::from(format!("main:{path_key}")))
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_y_scroll()
+                            .child(page),
+                    ),
+            )
+            .when(has_music, |d| d.child(self.music.clone()))
+    }
 }
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().size_full().font_family("Segoe UI").text_color(theme::fg());
+        let root = div()
+            .size_full()
+            .text_color(cx.theme().foreground)
+            .on_action(cx.listener(|v, _: &OpenSearch, window, cx| {
+                if v.player.is_none() && v.reader.is_none() && v.state.read(cx).user.is_some() {
+                    SearchPalette::open(&v.palette, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|v, _: &Back, _, cx| v.state.update(cx, |s, cx| s.back(cx))))
+            .on_action(cx.listener(|v, _: &Forward, _, cx| v.state.update(cx, |s, cx| s.forward(cx))));
         if let Some((player, _)) = &self.player {
             // Sem fundo: o vídeo aparece pelo que o GPUI deixa transparente.
             return root.child(player.clone()).into_any_element();
         }
         if let Some((reader, _)) = &self.reader {
-            return root.bg(theme::bg()).child(reader.clone()).into_any_element();
+            return root.child(reader.clone()).into_any_element();
         }
         let (ready, logged) = {
             let s = self.state.read(cx);
             (s.session_ready, s.user.is_some())
         };
         if !ready {
-            return root.bg(theme::bg()).into_any_element();
+            return root.into_any_element();
         }
-        let titlebar = |inner: gpui::Div| {
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap_1()
-                .h_12()
-                .pl_3()
-                .border_b_1()
-                .border_color(theme::line())
-                .bg(theme::bg())
-                .child(inner)
-                .child(div().h_full().flex_1().window_control_area(WindowControlArea::Drag))
-                .child(window_controls(window))
-        };
         if !logged {
             let login = self.login.get_or_insert_with(|| cx.new(LoginView::new)).clone();
             return root
-                .bg(theme::bg())
-                .flex()
-                .flex_col()
-                .child(titlebar(div().text_xl().font_weight(FontWeight::BOLD).text_color(theme::brand()).child("higanbana")))
-                .child(div().flex_1().min_h_0().child(login))
+                .child(
+                    v_flex()
+                        .size_full()
+                        .child(gpui_kit::component::TitleBar::new().child(div().font_weight(gpui_kit::FontWeight::BOLD).text_color(cx.theme().primary).child("higanbana")))
+                        .child(div().flex_1().min_h_0().child(login)),
+                )
                 .into_any_element();
         }
         self.login = None;
-        let page = self.page(cx);
-        let st = self.state.clone();
-        let (can_back, can_fwd, has_music) = {
-            let s = self.state.read(cx);
-            (s.can_back(), s.can_forward(), s.music.as_ref().is_some_and(|m| m.album.is_some()))
-        };
-        let path_key = self.state.read(cx).path().to_owned();
-
-        let bar = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_1()
-            .h_12()
-            .pl_3()
-            .border_b_1()
-            .border_color(theme::line())
-            .bg(theme::bg())
-            .child(
-                div()
-                    .id("brand")
-                    .mr_2()
-                    .px_1()
-                    .cursor_pointer()
-                    .text_xl()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::brand())
-                    .child("higanbana")
-                    .on_click({
-                        let st = st.clone();
-                        move |_, _, cx| st.update(cx, |s, cx| s.go("", cx))
-                    }),
-            )
-            .child(icon_button("back", "chevron-left").size_8().when(!can_back, |d| d.opacity(0.35)).on_click({
-                let st = st.clone();
-                move |_, _, cx| st.update(cx, |s, cx| s.back(cx))
-            }))
-            .child(icon_button("forward", "chevron-right").size_8().when(!can_fwd, |d| d.opacity(0.35)).on_click({
-                let st = st.clone();
-                move |_, _, cx| st.update(cx, |s, cx| s.forward(cx))
-            }))
-            .child(
-                div()
-                    .h_full()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .px_4()
-                    .window_control_area(WindowControlArea::Drag)
-                    .child(self.search.clone()),
-            )
-            .child(div().pr_2().child(self.downloads.clone()))
-            .child(window_controls(window));
-
-        root.relative()
-            .bg(theme::bg())
-            .flex()
-            .flex_col()
-            .on_action(cx.listener(|v, _: &FocusSearch, window, cx| v.search.update(cx, |s, cx| s.focus(window, cx))))
-            .on_action({
-                let st = st.clone();
-                move |_: &Back, _, cx| st.update(cx, |s, cx| s.back(cx))
-            })
-            .on_action({
-                let st = st.clone();
-                move |_: &Forward, _, cx| st.update(cx, |s, cx| s.forward(cx))
-            })
-            .on_mouse_up(MouseButton::Navigate(NavigationDirection::Back), {
-                let st = st.clone();
-                move |_, _, cx| st.update(cx, |s, cx| s.back(cx))
-            })
-            .on_mouse_up(MouseButton::Navigate(NavigationDirection::Forward), {
-                let st = st.clone();
-                move |_, _, cx| st.update(cx, |s, cx| s.forward(cx))
-            })
-            .child(bar)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.sidebar.clone())
-                    .child(
-                        div()
-                            .id(gpui::SharedString::from(format!("main-{path_key}")))
-                            .relative()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_y_scroll()
-                            .bg(theme::canvas())
-                            .child(page),
-                    ),
-            )
-            .when(has_music, |d| d.child(self.music.clone()))
-            .child(toasts(&self.state, cx))
-            .child(div().absolute().size(px(0.)))
-            .into_any_element()
+        root.child(self.render_workspace(window, cx)).into_any_element()
     }
 }
