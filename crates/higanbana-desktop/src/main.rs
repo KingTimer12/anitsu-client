@@ -4,7 +4,6 @@
 mod app;
 mod chrome;
 mod components;
-mod input;
 mod music;
 mod reader;
 mod state;
@@ -16,7 +15,7 @@ mod views;
 use std::{rc::Rc, sync::Arc};
 
 use futures::channel::mpsc;
-use gpui::{App, AppContext, Application, Bounds, TitlebarOptions, Window, WindowBounds, WindowOptions, point, px, size};
+use gpui_kit::{App, AppContext, Bounds, TitlebarOptions, Window, WindowBounds, WindowOptions, component::TitleBar, px, size};
 use higanbana_core::{Core, Event, Paths};
 
 fn main() {
@@ -27,19 +26,23 @@ fn main() {
     });
     let core = Arc::new(Core::new(paths, events).expect("núcleo do higanbana"));
 
-    Application::new().with_assets(ui::Assets).run(move |cx: &mut App| {
-        input::bind_keys(cx);
+    gpui_kit::application().with_assets(ui::Assets).run(move |cx: &mut App| {
+        gpui_kit::init(cx);
+        theme::install(cx);
         app::bind_keys(cx);
         state::install(core.clone(), cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+        // Tamanhos da janela em pixels: limite físico da plataforma, não espaçamento da interface.
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            // Barra de título própria (a moldura desenha os botões da janela).
-            titlebar: Some(TitlebarOptions { title: Some("higanbana".into()), appears_transparent: true, traffic_light_position: Some(point(px(12.), px(12.))) }),
+            // A `TitleBar` do kit desenha a barra e os botões da janela.
+            titlebar: Some(TitlebarOptions { title: Some("higanbana".into()), ..TitleBar::title_bar_options() }),
             window_min_size: Some(size(px(960.), px(600.))),
-            ..Default::default()
+            // Transparente: o vídeo (janela nativa embaixo) aparece onde nada é pintado.
+            window_background: gpui_kit::WindowBackgroundAppearance::Transparent,
+            ..TitleBar::window_options()
         };
-        cx.open_window(options, |window, cx| {
+        gpui_kit::open_window(options, cx, |window, cx| {
             let hwnd = hwnd(window);
             core.music().attach_media_keys(hwnd);
             let surface = Rc::new(hwnd.and_then(video::Surface::new).expect("janela do vídeo"));
@@ -47,7 +50,7 @@ fn main() {
             cx.new(|cx| app::AppView::new(core.clone(), surface, rx, handle, window, cx))
         })
         .expect("janela principal");
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
 }

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, ImageFormat, Task};
+use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, ImageFormat, Task};
 use higanbana_core::{
     Core,
     anilist::{LookupRequest, MediaType, types::MediaSummary},
@@ -21,7 +21,6 @@ use crate::video::PlayTarget;
 const LOOKUP_DELAY: Duration = Duration::from_millis(60);
 const LOOKUP_MAX: usize = 40;
 const MAX_DOWNLOADS: usize = 2;
-const TOAST_FOR: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug)]
 pub struct User {
@@ -42,7 +41,7 @@ pub fn user_of(s: &Session) -> User {
 #[derive(Clone)]
 pub enum Img {
     Loading,
-    Ready(Arc<gpui::Image>),
+    Ready(Arc<gpui_kit::Image>),
     Failed,
 }
 
@@ -79,18 +78,13 @@ pub enum Tone {
     Error,
 }
 
-#[derive(Clone)]
-pub struct Toast {
-    pub id: u64,
-    pub message: String,
-    pub tone: Tone,
-}
-
 /// Pedidos que a raiz atende (abrir player/leitor, trazer a janela para frente).
 pub enum AppEvent {
     Play(PlayTarget),
     Read(crate::reader::ReadTarget),
     Navigated,
+    /// Aviso curto para o usuário (vira notificação na janela).
+    Notify(Tone, String),
 }
 
 pub struct AppState {
@@ -106,8 +100,7 @@ pub struct AppState {
     lookup_task: Option<Task<()>>,
     catalog: HashMap<i64, Option<Option<String>>>,
     pub downloads: Vec<Download>,
-    pub toasts: Vec<Toast>,
-    next_toast: u64,
+    next_download: u64,
     pub player_data: PlayerData,
     pub music: Option<higanbana_core::music::engine::PlayerState>,
     pub music_session: crate::music::session::MusicSession,
@@ -138,8 +131,7 @@ pub fn install(core: Arc<Core>, cx: &mut App) -> Entity<AppState> {
             lookup_task: None,
             catalog: HashMap::new(),
             downloads: Vec::new(),
-            toasts: Vec::new(),
-            next_toast: 1,
+            next_download: 1,
             player_data,
             music: None,
             music_session: Default::default(),
@@ -250,7 +242,7 @@ impl AppState {
             let result = task.await.ok().and_then(Result::ok);
             let _ = this.update(cx, |s, cx| {
                 let img = match result.as_deref().and_then(|b| Some((sniff(b)?, b))) {
-                    Some((fmt, b)) => Img::Ready(Arc::new(gpui::Image::from_bytes(fmt, b.to_vec()))),
+                    Some((fmt, b)) => Img::Ready(Arc::new(gpui_kit::Image::from_bytes(fmt, b.to_vec()))),
                     None => Img::Failed,
                 };
                 s.images.insert(key, img);
@@ -264,7 +256,7 @@ impl AppState {
     /// Guarda bytes já baixados (páginas, capas da nuvem) sob uma chave.
     pub fn put_image(&mut self, key: String, bytes: Vec<u8>, cx: &mut Context<Self>) {
         let img = match sniff(&bytes) {
-            Some(fmt) => Img::Ready(Arc::new(gpui::Image::from_bytes(fmt, bytes))),
+            Some(fmt) => Img::Ready(Arc::new(gpui_kit::Image::from_bytes(fmt, bytes))),
             None => Img::Failed,
         };
         self.images.insert(key, img);
@@ -386,23 +378,7 @@ impl AppState {
     // --- Avisos ---
 
     pub fn toast(&mut self, message: impl Into<String>, tone: Tone, cx: &mut Context<Self>) {
-        let id = self.next_toast;
-        self.next_toast += 1;
-        if self.toasts.len() >= 3 {
-            self.toasts.remove(0);
-        }
-        self.toasts.push(Toast { id, message: message.into(), tone });
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(TOAST_FOR).await;
-            let _ = this.update(cx, |s, cx| s.dismiss(id, cx));
-        })
-        .detach();
-    }
-
-    pub fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {
-        self.toasts.retain(|t| t.id != id);
-        cx.notify();
+        cx.emit(AppEvent::Notify(tone, message.into()));
     }
 
     // --- Downloads ---
@@ -433,7 +409,8 @@ impl AppState {
             return;
         }
         let name = path.rsplit('/').next().unwrap_or(path).to_owned();
-        let id = format!("dl-{}-{}", std::process::id(), self.downloads.len() + 1 + self.next_toast as usize * 1000);
+        let id = format!("dl-{}-{}", std::process::id(), self.next_download);
+        self.next_download += 1;
         self.downloads.insert(0, Download { id, path: path.to_owned(), name, downloaded: 0, total: None, status: DlStatus::Queued, dest: None, error: None });
     }
 

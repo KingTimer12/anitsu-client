@@ -1,9 +1,15 @@
 //! Encarte do álbum ("encarte de CD japonês"): capa com obi, faixas por disco, arquivos.
 
 use base64::Engine as _;
-use gpui::{
-    Context, Entity, EventEmitter, FontWeight, IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled, Window, div, img,
-    prelude::*, px, relative,
+use gpui_kit::{
+    Context, ElementId, Entity, EventEmitter, FontWeight, IntoElement, ObjectFit, ParentElement, Render, Styled,
+    Subscription, Window, assets::IconName, div, img, prelude::*, px, relative,
+};
+use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex,
+    button::{Button, ButtonVariants as _},
+    tab::{Tab, TabBar},
 };
 use higanbana_core::{
     music::album::{Album, format_duration, format_label},
@@ -13,10 +19,10 @@ use higanbana_core::{
 pub use higanbana_core::music::album::looks_like_album;
 
 use crate::{
-    components::{content_width, file_list, skeleton},
+    components::file_list,
     state::{AppState, Img, state},
-    theme,
-    ui::{icon, truncate},
+    theme::ProductColors as _,
+    ui::truncate,
 };
 
 pub enum AlbumEvent {
@@ -25,7 +31,7 @@ pub enum AlbumEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+enum Section {
     Tracks,
     Files,
 }
@@ -34,8 +40,9 @@ pub struct AlbumView {
     state: Entity<AppState>,
     work: Option<String>,
     album: Option<Album>,
-    tab: Tab,
+    tab: Section,
     cover_key: Option<String>,
+    _subs: Vec<Subscription>,
 }
 
 impl EventEmitter<AlbumEvent> for AlbumView {}
@@ -47,7 +54,7 @@ fn pad(n: Option<u32>, i: usize) -> String {
 impl AlbumView {
     pub fn new(path: String, files: Vec<FileEntry>, work: Option<String>, cx: &mut Context<Self>) -> Self {
         let state = state(cx);
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        let subs = vec![cx.observe(&state, |_, _, cx| cx.notify())];
         let core = state.read(cx).core.clone();
         let task = core.clone().spawn(async move { core.cloud().load_album(&path, &files).await });
         cx.spawn(async move |this, cx| {
@@ -63,7 +70,7 @@ impl AlbumView {
             });
         })
         .detach();
-        Self { state, work, album: None, tab: Tab::Tracks, cover_key: None }
+        Self { state, work, album: None, tab: Section::Tracks, cover_key: None, _subs: subs }
     }
 
     /// Capa da pasta; sem ela, a capa embutida na primeira faixa.
@@ -91,7 +98,7 @@ impl AlbumView {
         let state = self.state.clone();
         cx.spawn(async move |_, cx| {
             let bytes = task.await.ok().flatten();
-            let _ = state.update(cx, |s, cx| match bytes {
+            state.update(cx, |s, cx| match bytes {
                 Some(b) => s.put_image(key, b, cx),
                 None => s.fail_image(&key, cx),
             });
@@ -102,8 +109,9 @@ impl AlbumView {
 
 impl Render for AlbumView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(a) = self.album.clone() else { return skeleton().h(px(384.)).rounded_2xl().into_any_element() };
-        let width = content_width(window, 1280.);
+        let theme = cx.theme().clone();
+        let Some(a) = self.album.clone() else { return Skeleton::new().h_96().rounded(theme.radius_lg).into_any_element() };
+        let rem = f32::from(window.rem_size());
         let st = self.state.read(cx);
         let current = st.is_current_album(&a);
         let live = if current { st.music.clone() } else { None };
@@ -130,210 +138,169 @@ impl Render for AlbumView {
                 .items_center()
                 .justify_center()
                 .p_4()
-                .text_xl()
+                .text_lg()
                 .font_weight(FontWeight::BOLD)
-                .text_color(theme::muted())
+                .text_color(theme.muted_foreground)
                 .child(a.title.clone())
                 .into_any_element(),
         };
 
+        // --- Ações: a principal toca/pausa; "continuar" só quando outro álbum está tocando ---
         let st_entity = self.state.clone();
-        let main_label = if current && playing {
-            "Pausar"
+        let (main_label, main_icon) = if current && playing {
+            ("Pausar", IconName::Pause)
         } else if current && !ended {
-            "Continuar"
+            ("Continuar", IconName::Play)
         } else {
-            "Tocar"
+            ("Tocar", IconName::Play)
         };
         let album_for_play = a.clone();
-        let main_button = div()
-            .id("album-play")
-            .flex()
-            .items_center()
-            .gap_2()
-            .h_10()
-            .px_4()
-            .rounded_lg()
-            .bg(theme::brand())
-            .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
-            .hover(|d| d.opacity(0.9))
-            .child(icon(if current && playing { "pause" } else { "play" }).size_4().text_color(theme::white()))
-            .child(main_label)
-            .on_click({
-                let st = st_entity.clone();
-                move |_, _, cx| {
-                    st.update(cx, |s, cx| {
-                        if current && playing {
-                            s.music_command("pause");
-                        } else if current && !ended {
-                            s.music_command("resume");
-                        } else {
-                            s.music_open(album_for_play.clone(), 0, 0., cx);
-                        }
-                    })
-                }
-            });
+        let main_button = Button::new("album-play").primary().icon(main_icon).label(main_label).on_click({
+            let st = st_entity.clone();
+            move |_, _, cx| {
+                st.update(cx, |s, cx| {
+                    if current && playing {
+                        s.music_command("pause");
+                    } else if current && !ended {
+                        s.music_command("resume");
+                    } else {
+                        s.music_open(album_for_play.clone(), 0, 0., cx);
+                    }
+                })
+            }
+        });
+        let resume_button = resume.filter(|_| !current).map(|p| {
+            let st = st_entity.clone();
+            let al = a.clone();
+            Button::new("album-resume")
+                .outline()
+                .label(format!("Continuar faixa {} ({})", p.index + 1, format_duration(p.position)))
+                .on_click(move |_, _, cx| st.update(cx, |s, cx| s.music_open(al.clone(), p.index, p.position, cx)))
+        });
 
-        let aside = div()
-            .w(px(288.))
+        let art = px(14. * rem);
+        let aside = v_flex()
+            .w(art + px(3.5 * rem))
             .flex_none()
-            .p_5()
-            .rounded_xl()
-            .bg(theme::surface())
+            .gap_4()
+            .p_4()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.group_box)
             .child(
+                // Capa com o obi (a faixa vertical dos CDs japoneses).
                 div()
                     .relative()
-                    .mr_5()
-                    .child(div().w(px(228.)).h(px(228.)).overflow_hidden().rounded_md().bg(theme::elevated()).shadow_lg().child(cover_el))
+                    .w(art + px(1.25 * rem))
+                    .child(div().w(art).h(art).overflow_hidden().rounded(theme.radius).bg(theme.muted).shadow_lg().child(cover_el))
                     .children(obi.map(|o| {
-                        div()
+                        v_flex()
                             .absolute()
                             .top_0()
-                            .right(px(-20.))
+                            .right_0()
                             .h_full()
-                            .w_9()
-                            .flex()
-                            .flex_col()
+                            .w_8()
                             .items_center()
                             .justify_center()
-                            .rounded_r_md()
-                            .bg(theme::brand())
+                            .rounded_r(theme.radius)
+                            .bg(theme.primary)
+                            .text_color(theme.primary_foreground)
                             .text_xs()
                             .font_weight(FontWeight::BOLD)
                             .children(o.chars().map(|c| div().child(c.to_string())))
                     })),
             )
-            .child(div().mt_5().text_2xl().font_weight(FontWeight::BOLD).line_height(relative(1.3)).child(a.title.clone()))
             .child(
-                div()
-                    .mt_1()
-                    .text_sm()
-                    .text_color(theme::muted())
-                    .child([self.work.clone(), a.year.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ")),
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xl().font_weight(FontWeight::BOLD).line_height(relative(1.3)).child(a.title.clone()))
+                    .child(div().text_sm().text_color(theme.muted_foreground).child([self.work.clone(), a.year.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · "))),
             )
+            .child(h_flex().flex_wrap().gap_2().child(main_button).children(resume_button))
             .child(
-                div().mt_4().flex().flex_wrap().gap_2().child(main_button).children(resume.filter(|_| !current).map(|p| {
-                    let st = st_entity.clone();
-                    let al = a.clone();
-                    div()
-                        .id("album-resume")
-                        .flex()
-                        .items_center()
-                        .h_10()
-                        .px_3()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::line_strong())
-                        .cursor_pointer()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .hover(|d| d.border_color(theme::brand_ink()))
-                        .child(format!("Continuar faixa {} ({})", p.index + 1, format_duration(p.position)))
-                        .on_click(move |_, _, cx| st.update(cx, |s, cx| s.music_open(al.clone(), p.index, p.position, cx)))
-                })),
-            )
-            .children(format.map(|f| div().mt_4().text_xs().text_color(theme::muted()).child(f)))
-            .child(div().mt_1().text_xs().text_color(theme::faint()).child(format!(
-                "{} faixas{}",
-                a.tracks.len(),
-                total_secs.map(|s| format!(" · {}", format_duration(s))).unwrap_or_default()
-            )));
-
-        let tab_button = |id: Tab, label: String, active: bool| {
-            div()
-                .id(SharedString::from(label.clone()))
-                .pb_2()
-                .border_b_2()
-                .border_color(if active { theme::brand() } else { gpui::transparent_black().into() })
-                .cursor_pointer()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(if active { theme::fg() } else { theme::muted() })
-                .child(label)
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    v.tab = id;
-                    cx.notify();
-                }))
-        };
-        let tabs = div()
-            .mb_3()
-            .flex()
-            .gap_5()
-            .border_b_1()
-            .border_color(theme::line())
-            .child(tab_button(Tab::Tracks, "Faixas".into(), self.tab == Tab::Tracks))
-            .child(tab_button(Tab::Files, format!("Arquivos ({})", a.others.len()), self.tab == Tab::Files));
+                v_flex()
+                    .gap_0p5()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .children(format)
+                    .child(format!("{} faixas{}", a.tracks.len(), total_secs.map(|s| format!(" · {}", format_duration(s))).unwrap_or_default())),
+            );
 
         let body = match self.tab {
-            Tab::Files => {
-                let others = a.others.clone();
-                div()
-                    .child(div().mb_3().text_sm().text_color(theme::muted()).child("Só as faixas nesta pasta."))
-                    .child(file_list(&a.path, &others, None, None, cx))
-                    .into_any_element()
-            }
-            Tab::Tracks => div()
-                .flex()
-                .flex_col()
+            Section::Files => v_flex()
+                .gap_3()
+                .child(div().text_sm().text_color(theme.muted_foreground).child("Arquivos desta pasta que não são faixas."))
+                .child(file_list(&a.path, &a.others, None, None, cx))
+                .into_any_element(),
+            Section::Tracks => v_flex()
                 .gap_4()
                 .children(a.discs.iter().map(|&d| {
                     let rows: Vec<(usize, higanbana_core::music::album::Track)> = a.tracks.iter().cloned().enumerate().filter(|(_, t)| t.disc == d).collect();
-                    div()
+                    v_flex()
                         .when(a.discs.len() > 1, |x| {
-                            x.child(div().mb_1().px_3().flex().items_center().gap_2().text_xs().text_color(theme::faint()).child(icon("disc-3").size_3p5().text_color(theme::faint())).child(format!("Disco {d}")))
+                            x.child(h_flex().mb_1().px_3().gap_2().text_xs().text_color(theme.muted_foreground).child(Icon::new(IconName::Disc3).xsmall()).child(format!("Disco {d}")))
                         })
                         .children(rows.into_iter().map(|(i, t)| {
                             let meta = metas.get(&t.path);
                             let on = current_index == Some(i) && current;
                             let st = st_entity.clone();
                             let al = a.clone();
-                            div()
-                                .id(SharedString::from(format!("track-{i}")))
-                                .flex()
-                                .items_center()
+                            h_flex()
+                                .id(ElementId::Name(format!("track:{}", t.path).into()))
                                 .gap_3()
                                 .px_3()
                                 .py_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .map(|x| if on { x.bg(gpui::Rgba { a: 0.1, ..theme::brand() }) } else { x.hover(|s| s.bg(theme::white_a(0.04))) })
+                                .rounded(theme.radius)
+                                .map(|x| if on { x.bg(theme.list_active) } else { x.hover(|s| s.bg(theme.list_hover)) })
                                 .child(
                                     div()
-                                        .w_12()
+                                        .w_10()
                                         .flex_none()
-                                        .text_xl()
+                                        .text_lg()
                                         .font_weight(FontWeight::BOLD)
-                                        .text_color(if on { theme::brand_ink() } else { theme::faint() })
-                                        .child(if on && playing { icon("audio-lines").text_color(theme::brand_ink()).into_any_element() } else { div().child(pad(t.number, i)).into_any_element() }),
+                                        .text_color(if on { theme.primary_ink() } else { theme.muted_foreground })
+                                        .child(if on && playing {
+                                            Icon::new(IconName::AudioLines).text_color(theme.primary_ink()).into_any_element()
+                                        } else {
+                                            div().child(pad(t.number, i)).into_any_element()
+                                        }),
                                 )
                                 .child(
-                                    div()
+                                    v_flex()
                                         .flex_1()
                                         .min_w_0()
-                                        .child(truncate(meta.and_then(|m| m.title.clone()).filter(|s| !s.is_empty()).unwrap_or(t.title.clone())).when(on, |x| x.text_color(theme::brand_ink())))
-                                        .children(meta.and_then(|m| m.artist.clone()).map(|ar| truncate(ar).text_xs().text_color(theme::muted()))),
+                                        .child(truncate(meta.and_then(|m| m.title.clone()).filter(|s| !s.is_empty()).unwrap_or(t.title.clone())).when(on, |x| x.text_color(theme.primary_ink())))
+                                        .children(meta.and_then(|m| m.artist.clone()).map(|ar| truncate(ar).text_xs().text_color(theme.muted_foreground))),
                                 )
-                                .child(div().text_sm().text_color(theme::muted()).child(meta.and_then(|m| m.duration).map(format_duration).unwrap_or_default()))
-                                .on_click(move |_, _, cx| {
-                                    st.update(cx, |s, cx| if on { s.music_command("toggle") } else { s.music_open(al.clone(), i, 0., cx) })
-                                })
+                                .child(div().w_12().text_right().text_sm().text_color(theme.muted_foreground).child(meta.and_then(|m| m.duration).map(format_duration).unwrap_or_default()))
+                                .on_click(move |_, _, cx| st.update(cx, |s, cx| if on { s.music_command("toggle") } else { s.music_open(al.clone(), i, 0., cx) }))
                         }))
                 }))
                 .into_any_element(),
         };
 
-        div()
-            .w(px(width))
-            .flex()
+        h_flex()
+            .w_full()
             .items_start()
-            .gap_10()
+            .gap_8()
             .child(aside)
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(tabs)
+                    .gap_4()
+                    .child(
+                        TabBar::new("album-tabs")
+                            .underline()
+                            .selected_index(if self.tab == Section::Tracks { 0 } else { 1 })
+                            .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                                v.tab = if *ix == 0 { Section::Tracks } else { Section::Files };
+                                cx.notify();
+                            }))
+                            .child(Tab::new().label("Faixas"))
+                            .child(Tab::new().label(format!("Arquivos {}", a.others.len()))),
+                    )
                     .child(body),
             )
             .into_any_element()

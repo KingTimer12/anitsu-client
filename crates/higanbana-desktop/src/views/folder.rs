@@ -3,18 +3,23 @@
 
 use std::rc::Rc;
 
-use gpui::{Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px};
+use gpui_kit::{
+    Context, ElementId, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Subscription, Window,
+    assets::IconName, div, prelude::*, px,
+};
+use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use higanbana_core::{
     library::{join_path, natural_cmp, split_path},
     nuvem::FileEntry,
 };
 
 use crate::{
-    components::{breadcrumbs, columns, content_width, file_list, section_label, skeleton, FileAction},
-    music::album::{AlbumView, looks_like_album},
+    components::{breadcrumbs, columns, content_width, file_list, section_label, FileAction},
+    music::album::{AlbumEvent, AlbumView, looks_like_album},
     reader::ReadTarget,
     state::{AppState, state},
-    theme,
+    ui::empty_state,
     video::PlayTarget,
     views::load_listing,
 };
@@ -26,16 +31,36 @@ pub struct FolderView {
     album: Option<Entity<AlbumView>>,
     /// O encarte avisou que não era álbum: mostra a lista.
     not_album: bool,
+    _subs: Vec<Subscription>,
 }
 
 impl FolderView {
     pub fn new(path: String, cx: &mut Context<Self>) -> Self {
         let state = state(cx);
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        load_listing(&state, path.clone(), cx, |v: &mut Self, r| {
+        let subs = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        load_listing(&state, path.clone(), cx, |v: &mut Self, r, cx| {
             v.listing = Some(r);
+            v.ensure_album(cx);
         });
-        Self { state, path, listing: None, album: None, not_album: false }
+        Self { state, path, listing: None, album: None, not_album: false, _subs: subs }
+    }
+
+    /// Pasta com músicas vira encarte (se não for álbum, o encarte avisa e volta à lista).
+    fn ensure_album(&mut self, cx: &mut Context<Self>) {
+        let Some(Ok(files)) = &self.listing else { return };
+        if self.album.is_some() || !looks_like_album(files) {
+            return;
+        }
+        let segs = self.segs();
+        let (path, files, work) = (self.path.clone(), files.clone(), segs.len().checked_sub(2).map(|i| segs[i].clone()));
+        let view = cx.new(|cx| AlbumView::new(path, files, work, cx));
+        self._subs.push(cx.subscribe(&view, |v, _, e: &AlbumEvent, cx| {
+            if matches!(e, AlbumEvent::NotAlbum) {
+                v.not_album = true;
+                cx.notify();
+            }
+        }));
+        self.album = Some(view);
     }
 
     fn segs(&self) -> Vec<String> {
@@ -56,35 +81,20 @@ impl FolderView {
 
 impl Render for FolderView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = content_width(window, 1280.);
+        let theme = cx.theme().clone();
+        let rem = f32::from(window.rem_size());
+        let width = content_width(window, 80. * rem);
         let segs = self.segs();
         let title = if segs.len() == 1 { section_label(&segs[0]) } else { segs.last().cloned().unwrap_or_default() };
-
         let files = match &self.listing {
             Some(Ok(f)) => Some(f.clone()),
             _ => None,
         };
-        // Pasta com músicas vira encarte (se não for álbum, o encarte avisa e volta à lista).
-        if let Some(f) = &files
-            && looks_like_album(f)
-            && self.album.is_none()
-        {
-            let (path, files, work) = (self.path.clone(), f.clone(), segs.len().checked_sub(2).map(|i| segs[i].clone()));
-            let view = cx.new(|cx| AlbumView::new(path, files, work, cx));
-            cx.subscribe(&view, |v, _, e: &crate::music::album::AlbumEvent, cx| {
-                if matches!(e, crate::music::album::AlbumEvent::NotAlbum) {
-                    v.not_album = true;
-                    cx.notify();
-                }
-            })
-            .detach();
-            self.album = Some(view);
-        }
         let album_active = self.album.is_some() && !self.not_album;
 
         let body = match (&self.listing, files) {
-            (None, _) | (Some(Ok(_)), None) => skeleton().h(px(288.)).rounded_2xl().into_any_element(),
-            (Some(Err(e)), _) => div().text_color(theme::danger()).child(e.clone()).into_any_element(),
+            (None, _) | (Some(Ok(_)), None) => Skeleton::new().h_72().rounded(theme.radius_lg).into_any_element(),
+            (Some(Err(e)), _) => empty_state(IconName::WifiOff, "Não foi possível abrir esta pasta", Some(e.clone().into()), cx).into_any_element(),
             (_, Some(_)) if album_active => self.album.clone().unwrap().into_any_element(),
             (_, Some(files)) => {
                 let dirs: Vec<&FileEntry> = files.iter().filter(|f| f.is_directory).collect();
@@ -92,33 +102,33 @@ impl Render for FolderView {
                 if is_index {
                     let mut names: Vec<String> = dirs.iter().map(|d| d.name.clone()).collect();
                     names.sort_by(|a, b| natural_cmp(a, b));
-                    let cols = columns(width, 96., 12.);
+                    let gap = 0.75 * rem;
+                    let cols = columns(width, 6. * rem, gap);
+                    let side = px(((width - (cols as f32 - 1.) * gap) / cols as f32).floor());
                     div()
                         .grid()
                         .grid_cols(cols as u16)
                         .gap_3()
-                        .children(names.into_iter().enumerate().map(|(i, name)| {
+                        .children(names.into_iter().map(|name| {
                             let short = name.trim_start_matches("Letra ").trim_start_matches('[').trim_end_matches(']').to_owned();
                             let big = short.chars().count() <= 3;
                             let target = join_path(&self.path, &name);
                             let st = self.state.clone();
-                            let side = px(((width - (cols as f32 - 1.) * 12.) / cols as f32).floor());
                             div()
-                                .id(SharedString::from(format!("tile-{i}")))
+                                .id(ElementId::Name(format!("tile:{name}").into()))
                                 .w(side)
                                 .h(side)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .p_2()
-                                .rounded_2xl()
+                                .rounded(theme.radius_lg)
                                 .border_1()
-                                .border_color(theme::line())
-                                .bg(gpui::Rgba { a: 0.7, ..theme::surface() })
-                                .cursor_pointer()
+                                .border_color(theme.border)
+                                .bg(theme.group_box)
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .hover(|d| d.border_color(theme::brand()).text_color(theme::brand()))
-                                .map(|d| if big { d.text_3xl() } else { d.text_sm() })
+                                .hover(|d| d.bg(theme.secondary_hover).border_color(theme.ring))
+                                .map(|d| if big { d.text_2xl() } else { d.text_sm() })
                                 .child(short)
                                 .on_click(move |_, _, cx| st.update(cx, |s, cx| s.go(target.clone(), cx)))
                         }))
@@ -144,13 +154,13 @@ impl Render for FolderView {
             }
         };
 
-        div()
+        v_flex()
             .w(px(width))
             .mx_auto()
             .py_6()
+            .gap_6()
             .child(breadcrumbs(&self.path, cx))
-            .when(!album_active, |d| d.child(div().mt_5().mb_8().text_3xl().font_weight(FontWeight::SEMIBOLD).child(title)))
-            .when(album_active, |d| d.child(div().mt_6()))
+            .when(!album_active, |d| d.child(div().text_2xl().font_weight(FontWeight::SEMIBOLD).child(title)))
             .child(body)
     }
 }

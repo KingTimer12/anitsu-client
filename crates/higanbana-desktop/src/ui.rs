@@ -1,87 +1,44 @@
-//! Peças de interface reaproveitadas pelas telas.
+//! Peças pequenas compartilhadas pelas telas, em cima dos componentes do GPUI Kit.
 
-use std::{borrow::Cow, time::Duration};
+use std::borrow::Cow;
 
-use gpui::{
-    Animation, AnimationExt, AssetSource, Div, ElementId, IntoElement, ParentElement, SharedString, Stateful,
-    Styled, Svg, Transformation, div, percentage, prelude::*, svg,
+use gpui_kit::{
+    AssetSource, Div, ParentElement, SharedString, Styled, div,
+    assets::{IconName, icon_assets},
 };
-use rust_embed::RustEmbed;
 
-use crate::theme;
+// Ícones do Lucide que as telas usam além dos que os componentes já trazem.
+icon_assets!(
+    ProductIcons,
+    [
+        ArrowDown, ArrowLeft, ArrowRight, AudioLines, BookOpen, Captions, Check, ChevronLeft, ChevronRight,
+        ChevronsRight, CircleAlert, Clapperboard, Columns2, Copy, Disc3, Download, ExternalLink, FilePlay, Folder,
+        FolderCheck, FolderOpen, House, Images, Inbox, Info, ListVideo, LoaderCircle, LogIn, LogOut, Maximize,
+        Minimize, Music, Palette, Pause, Play, RectangleVertical, RefreshCw, Repeat, Repeat1, ScrollText, Search,
+        Settings2, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Star, TriangleAlert, Tv, Volume1, Volume2,
+        VolumeX, WifiOff, X, ZoomIn, ZoomOut
+    ]
+);
 
-#[derive(RustEmbed)]
-#[folder = "assets"]
-#[include = "icons/lucide/*.svg"]
+/// Ícones dos componentes do kit + os do produto.
 pub struct Assets;
 
 impl AssetSource for Assets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        Ok(Self::get(path).map(|f| f.data))
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = ProductIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        // O pacote padrão dá erro para caminho desconhecido; para nós é só "não tem".
+        Ok(gpui_kit::assets::Assets.load(path).ok().flatten())
     }
 
-    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        Ok(Self::iter().filter(|p| p.starts_with(path)).map(SharedString::from).collect())
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
+        let mut all = ProductIcons.list(path)?;
+        all.extend(gpui_kit::assets::Assets.list(path)?);
+        all.sort();
+        all.dedup();
+        Ok(all)
     }
-}
-
-/// Ícone do lucide (`assets/icons/lucide/<nome>.svg`), na cor do texto.
-pub fn icon(name: &'static str) -> Svg {
-    // O svg do GPUI não herda a cor do texto: começa com a cor normal.
-    svg().path(SharedString::from(format!("icons/lucide/{name}.svg"))).size_5().flex_none().text_color(theme::fg())
-}
-
-/// Ícone de carregando, girando.
-pub fn spinner(id: impl Into<ElementId>) -> impl IntoElement {
-    icon("loader-circle").size_full().with_animation(id, Animation::new(Duration::from_millis(900)).repeat(), |s, d| {
-        s.with_transformation(Transformation::rotate(percentage(d)))
-    })
-}
-
-/// Botão quadrado só com ícone (barra de controles, cabeçalhos).
-pub fn icon_button(id: impl Into<ElementId>, name: &'static str) -> Stateful<Div> {
-    icon_toggle(id, name, false)
-}
-
-/// Botão de ícone que fica na cor de destaque quando ativo (menu aberto etc.).
-pub fn icon_toggle(id: impl Into<ElementId>, name: &'static str, active: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .size_10()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_lg()
-        .cursor_pointer()
-        .text_color(theme::fg())
-        .hover(|s| s.bg(theme::white_a(0.10)))
-        .child(icon(name).when(active, |i| i.text_color(theme::accent_ink())))
-}
-
-/// Botão de texto: principal (cor de destaque) ou discreto (borda).
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, primary: bool) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_1p5()
-        .px_4()
-        .py_2()
-        .rounded_lg()
-        .cursor_pointer()
-        .text_sm()
-        .font_weight(gpui::FontWeight::SEMIBOLD);
-    if primary {
-        base.bg(theme::accent()).text_color(theme::white()).hover(|s| s.bg(theme::accent_ink()))
-    } else {
-        base.border_1()
-            .border_color(theme::line_strong())
-            .text_color(theme::fg())
-            .hover(|s| s.bg(theme::white_a(0.08)))
-    }
-    .child(label.into())
 }
 
 /// Texto em uma linha só, cortado com reticências.
@@ -89,12 +46,30 @@ pub fn truncate(text: impl Into<SharedString>) -> Div {
     div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(text.into())
 }
 
+/// Bloco de estado vazio ou de erro: ícone, título, explicação e uma ação opcional.
+pub fn empty_state(icon: IconName, title: impl Into<SharedString>, detail: Option<SharedString>, cx: &gpui_kit::App) -> Div {
+    use gpui_kit::component::{ActiveTheme as _, Icon as KitIcon, v_flex};
+    v_flex()
+        .items_center()
+        .gap_2()
+        .py_12()
+        .px_6()
+        .text_center()
+        .child(KitIcon::new(icon).size_8().text_color(cx.theme().muted_foreground))
+        .child(div().font_weight(gpui_kit::FontWeight::MEDIUM).child(title.into()))
+        .children(detail.map(|d| div().max_w_96().text_sm().text_color(cx.theme().muted_foreground).child(d)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn icons_are_embedded() {
-        assert!(Assets::get("icons/lucide/play.svg").is_some(), "{:?}", Assets::iter().take(5).collect::<Vec<_>>());
+    fn product_and_component_icons_load() {
+        assert!(Assets.load("icons/audio-lines.svg").unwrap().is_some());
+        assert!(Assets.load(&IconName::Disc3.path()).unwrap().is_some());
+        // Ícone dos componentes (pacote padrão).
+        assert!(Assets.load("icons/chevron-down.svg").unwrap().is_some());
+        assert!(Assets.load("icons/nao-existe.svg").unwrap().is_none());
     }
 }

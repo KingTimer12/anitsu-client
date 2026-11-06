@@ -9,11 +9,22 @@ use std::{
 };
 
 use futures::StreamExt;
-use gpui::{
-    Bounds, ClickEvent, Context, CursorStyle, Div, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
-    SharedString, Stateful, Styled, Task, Window, canvas, div, linear_color_stop, linear_gradient, prelude::*, px,
-    relative,
+use gpui_kit::{
+    AnyElement, App, Bounds, ClickEvent, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
+    Pixels, Render, SharedString, Styled, Subscription, Task, Window, assets::IconName, canvas, div,
+    linear_color_stop, linear_gradient, prelude::*, px, relative, rems,
+};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex,
+    button::{Button, ButtonVariants as _},
+    popover::Popover,
+    progress::Progress as ProgressBar,
+    radio::RadioGroup,
+    separator::Separator as Divider,
+    slider::{Slider, SliderEvent, SliderState},
+    spinner::Spinner,
+    switch::Switch,
 };
 use higanbana_core::{
     Core,
@@ -36,8 +47,8 @@ use super::{
     surface::Surface,
 };
 use crate::{
-    theme,
-    ui::{button, icon, icon_button, icon_toggle, spinner, truncate},
+    theme::{self, ProductColors as _},
+    ui::truncate,
 };
 
 const HIDE_AFTER: Duration = Duration::from_millis(2500);
@@ -70,7 +81,6 @@ enum Menu {
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
     Seek(f64),
-    Volume,
 }
 
 /// Opções fixas: nada da interface do próprio mpv, cache só em RAM.
@@ -152,17 +162,19 @@ pub struct PlayerView {
     last_saved: Instant,
     drag: Option<Drag>,
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
-    volume_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Volume do mpv (0..100) no `Slider` do kit.
+    volume_slider: Entity<SliderState>,
     hover: Option<(Pixels, f64)>,
     /// Última posição do mouse (o GPUI repete o evento a cada quadro).
-    last_mouse: Option<gpui::Point<Pixels>>,
+    last_mouse: Option<gpui_kit::Point<Pixels>>,
     _events: Option<Task<()>>,
+    _subs: Vec<Subscription>,
 }
 
 impl EventEmitter<PlayerEvent> for PlayerView {}
 
 impl Focusable for PlayerView {
-    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+    fn focus_handle(&self, _: &gpui_kit::App) -> FocusHandle {
         self.focus.clone()
     }
 }
@@ -171,7 +183,14 @@ impl PlayerView {
     pub fn new(core: Arc<Core>, target: PlayTarget, surface: Rc<Surface>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let data = core.player().data();
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
+        let volume_slider = cx.new(|_| SliderState::new().min(0.).max(100.).step(1.).default_value(100.));
+        let subs = vec![cx.subscribe(&volume_slider, |v, _, e: &SliderEvent, cx| {
+            let (SliderEvent::Change(value) | SliderEvent::Release(value)) = e;
+            v.set_volume(value.start() as f64);
+            v.poke(cx);
+            cx.notify();
+        })];
         let mut this = Self {
             core,
             target,
@@ -211,17 +230,22 @@ impl PlayerView {
             last_saved: Instant::now(),
             drag: None,
             seek_bounds: Rc::default(),
-            volume_bounds: Rc::default(),
+            volume_slider,
             hover: None,
             last_mouse: None,
             _events: None,
+            _subs: subs,
         };
         match Mpv::new(&base_options(this.surface.wid(), this.data.settings.cache_mib), &OBSERVED) {
             Ok((mpv, mut rx)) => {
                 this.mpv = Some(mpv);
-                this._events = Some(cx.spawn(async move |this, cx| {
+                this._events = Some(cx.spawn_in(window, async move |this, cx| {
                     while let Some(e) = rx.next().await {
-                        if this.update(cx, |v, cx| v.on_mpv(e, cx)).is_err() {
+                        let r = this.update_in(cx, |v, window, cx| {
+                            v.on_mpv(e, cx);
+                            v.sync_volume_slider(window, cx);
+                        });
+                        if r.is_err() {
                             break;
                         }
                     }
@@ -481,6 +505,14 @@ impl PlayerView {
         self.volume = v;
     }
 
+    /// O mpv é a fonte do volume; o controle só reflete (menos durante o arraste, que já mandou o valor).
+    fn sync_volume_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = if self.muted { 0. } else { self.volume } as f32;
+        if (self.volume_slider.read(cx).value().start() - shown).abs() >= 0.5 {
+            self.volume_slider.update(cx, |s, cx| s.set_value(shown, window, cx));
+        }
+    }
+
     fn toggle_mute(&mut self) {
         if let Some(m) = &self.mpv {
             let _ = m.set_flag("mute", !self.muted);
@@ -617,10 +649,6 @@ impl PlayerView {
         self.idle && !self.paused && self.menu.is_none() && !self.buffering && self.drag.is_none()
     }
 
-    fn toggle_menu(&mut self, m: Menu) {
-        self.menu = if self.menu == Some(m) { None } else { Some(m) };
-    }
-
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let m = &e.keystroke.modifiers;
         if m.control || m.alt || m.platform {
@@ -660,10 +688,8 @@ impl PlayerView {
     }
 
     fn drag_to(&mut self, x: Pixels) {
-        match self.drag {
-            Some(Drag::Seek(_)) => self.drag = Some(Drag::Seek(Self::fraction(self.seek_bounds.get(), x) * self.dur)),
-            Some(Drag::Volume) => self.set_volume(Self::fraction(self.volume_bounds.get(), x) * 100.),
-            None => {}
+        if let Some(Drag::Seek(_)) = self.drag {
+            self.drag = Some(Drag::Seek(Self::fraction(self.seek_bounds.get(), x) * self.dur));
         }
     }
 
@@ -684,268 +710,180 @@ impl Drop for PlayerView {
 }
 
 // --- Desenho ---
+//
+// Tudo aqui fica sobre o vídeo: texto e trilhos usam as cores de sobre-mídia
+// (`theme::on_media*`, `media_scrim`), os controles são os do kit.
 
-fn gradient_down(alpha: f32) -> gpui::Background {
-    linear_gradient(180., linear_color_stop(theme::black_a(alpha), 0.), linear_color_stop(theme::black_a(0.), 1.))
+fn scrim_down(alpha: f32) -> gpui_kit::Background {
+    linear_gradient(180., linear_color_stop(theme::media_scrim(alpha), 0.), linear_color_stop(theme::media_scrim(0.), 1.))
 }
 
-fn gradient_up(alpha: f32) -> gpui::Background {
-    linear_gradient(0., linear_color_stop(theme::black_a(alpha), 0.), linear_color_stop(theme::black_a(0.), 1.))
+fn scrim_up(alpha: f32) -> gpui_kit::Background {
+    linear_gradient(0., linear_color_stop(theme::media_scrim(alpha), 0.), linear_color_stop(theme::media_scrim(0.), 1.))
 }
 
-fn panel(id: &'static str, width: f32) -> Stateful<Div> {
-    div()
-        .id(id)
-        .absolute()
-        .right_4()
-        .bottom(px(112.))
-        .w(px(width))
-        .max_h(px(520.))
-        .overflow_y_scroll()
-        .p_2()
-        .rounded_2xl()
+/// Cartão sobre o vídeo (erros, aviso de rede, próximo episódio).
+fn media_card(cx: &App) -> Div {
+    v_flex()
+        .gap_2()
+        .px_5()
+        .py_4()
+        .rounded(cx.theme().radius_lg)
         .border_1()
-        .border_color(theme::line_strong())
-        .bg(gpui::Rgba { a: 0.94, ..theme::surface() })
+        .border_color(cx.theme().border)
+        .bg(cx.theme().popover)
+        .text_color(cx.theme().popover_foreground)
         .shadow_lg()
-        .occlude()
 }
 
-fn heading(text: &'static str) -> Div {
-    div().px_3().pt_2().pb_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::faint()).child(text)
-}
-
-fn option(id: impl Into<gpui::ElementId>, selected: bool, label: impl Into<SharedString>, hint: Option<String>) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_3()
-        .w_full()
-        .px_3()
-        .py_2()
-        .rounded_lg()
-        .text_sm()
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::white_a(0.08)))
-        .when(selected, |d| d.text_color(theme::accent_ink()))
-        .child(icon("check").size_4().text_color(theme::accent_ink()).when(!selected, |i| i.invisible()))
-        .child(truncate(label).flex_1())
-        .children(hint.map(|h| div().text_xs().text_color(theme::faint()).child(h.to_uppercase())))
-}
-
-fn toggle_row(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_4()
-        .px_3()
-        .py_2p5()
-        .rounded_lg()
-        .text_sm()
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::white_a(0.06)))
-        .child(label)
-        .child(
-            div()
-                .relative()
-                .flex_none()
-                .w(px(36.))
-                .h(px(20.))
-                .rounded_full()
-                .bg(if on { theme::accent() } else { theme::white_a(0.15) })
-                .child(div().absolute().top(px(2.)).left(px(if on { 18. } else { 2. })).size(px(16.)).rounded_full().bg(theme::white())),
-        )
-}
-
-fn choice_chip(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex_1()
-        .flex()
-        .justify_center()
-        .px_2()
-        .py_1p5()
-        .rounded_lg()
-        .border_1()
-        .text_xs()
-        .font_weight(FontWeight::MEDIUM)
-        .cursor_pointer()
-        .map(|d| {
-            if selected {
-                d.border_color(theme::accent()).bg(theme::accent_soft()).text_color(theme::accent_ink())
-            } else {
-                d.border_color(theme::line_strong()).text_color(theme::muted()).hover(|s| s.text_color(theme::fg()))
-            }
-        })
-        .child(label.into())
+fn menu_heading(text: &'static str, cx: &App) -> Div {
+    div().pb_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(cx.theme().muted_foreground).child(text)
 }
 
 const LANGS: [(&str, &str); 5] = [("por", "Português"), ("eng", "Inglês"), ("jpn", "Japonês"), ("kor", "Coreano"), ("spa", "Espanhol")];
+const COUNTDOWNS: [u8; 3] = [5, 10, 15];
+const CACHES: [u32; 4] = [100, 150, 300, 500];
 
 impl PlayerView {
+    fn track_label(t: &Track) -> String {
+        match (t.title.as_ref(), t.lang.as_ref()) {
+            (Some(_), Some(lang)) => format!("{} ({})", t.name(), lang.to_uppercase()),
+            _ => t.name(),
+        }
+    }
+
     fn render_tracks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let subs: Vec<Track> = self.tracks.iter().filter(|t| t.kind == TrackKind::Sub).cloned().collect();
         let audios: Vec<Track> = self.tracks.iter().filter(|t| t.kind == TrackKind::Audio).cloned().collect();
-        let none_selected = !subs.iter().any(|t| t.selected);
-        panel("tracks-menu", 288.)
-            .child(heading("Legendas"))
-            .child(option("sub-off", none_selected, "Desligada", None).on_click(cx.listener(|v, _, _, cx| {
-                v.choose_sub(None);
-                cx.notify();
-            })))
-            .children(subs.into_iter().map(|t| {
-                let hint = t.title.as_ref().and(t.lang.clone());
-                option(SharedString::from(format!("sub-{}", t.id)), t.selected, t.name(), hint).on_click(cx.listener(
-                    move |v, _, _, cx| {
-                        v.choose_sub(Some(t.clone()));
+        // Índice 0 = desligada.
+        let sub_ix = subs.iter().position(|t| t.selected).map_or(0, |i| i + 1);
+        let audio_ix = audios.iter().position(|t| t.selected);
+        let sub_labels: Vec<String> = std::iter::once("Desligada".to_owned()).chain(subs.iter().map(Self::track_label)).collect();
+        v_flex()
+            .w_72()
+            .gap_3()
+            .child(
+                v_flex().child(menu_heading("Legenda", cx)).child(
+                    RadioGroup::vertical("subtitle-tracks").children(sub_labels).selected_index(Some(sub_ix)).on_change(cx.listener(move |v, ix: &usize, _, cx| {
+                        v.choose_sub(if *ix == 0 { None } else { subs.get(ix - 1).cloned() });
                         cx.notify();
-                    },
-                ))
-            }))
+                    })),
+                ),
+            )
             .when(audios.len() > 1, |p| {
-                p.child(
-                    div()
-                        .mt_1()
-                        .pt_1()
-                        .border_t_1()
-                        .border_color(theme::line())
-                        .child(heading("Áudio"))
-                        .children(audios.into_iter().map(|t| {
-                            let hint = t.title.as_ref().and(t.lang.clone());
-                            option(SharedString::from(format!("audio-{}", t.id)), t.selected, t.name(), hint).on_click(
-                                cx.listener(move |v, _, _, cx| {
-                                    v.choose_audio(t.clone());
-                                    cx.notify();
-                                }),
-                            )
+                let labels: Vec<String> = audios.iter().map(Self::track_label).collect();
+                p.child(Divider::horizontal()).child(
+                    v_flex().child(menu_heading("Áudio", cx)).child(
+                        RadioGroup::vertical("audio-tracks").children(labels).selected_index(audio_ix).on_change(cx.listener(move |v, ix: &usize, _, cx| {
+                            if let Some(t) = audios.get(*ix) {
+                                v.choose_audio(t.clone());
+                                cx.notify();
+                            }
                         })),
+                    ),
                 )
             })
     }
 
     fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = self.settings().clone();
-        let lang_row = |id: &'static str, label: &'static str, value: String, sub: bool| {
-            div()
-                .px_3()
-                .py_2p5()
-                .text_sm()
-                .child(div().mb_2().child(label))
-                .child(div().flex().flex_wrap().gap_1p5().children(LANGS.iter().map(|(code, name)| {
-                    let code = *code;
-                    choice_chip(SharedString::from(format!("{id}-{code}")), *name, value == code).on_click(cx.listener(
-                        move |v, _, _, cx| {
-                            v.change_settings(|s| {
-                                if sub {
-                                    s.sub_lang = code.into();
-                                } else {
-                                    s.audio_lang = code.into();
-                                }
-                            });
-                            cx.notify();
-                        },
-                    ))
-                })))
+        let lang_group = |id: &'static str, label: &'static str, value: &str, sub: bool, cx: &mut Context<Self>| {
+            v_flex().gap_1().child(menu_heading(label, cx)).child(
+                RadioGroup::horizontal(id)
+                    .children(LANGS.iter().map(|(_, name)| *name))
+                    .selected_index(LANGS.iter().position(|(code, _)| *code == value))
+                    .on_change(cx.listener(move |v, ix: &usize, _, cx| {
+                        let code = LANGS[*ix].0;
+                        v.change_settings(|s| if sub { s.sub_lang = code.into() } else { s.audio_lang = code.into() });
+                        cx.notify();
+                    })),
+            )
         };
-        panel("settings-menu", 320.)
-            .child(toggle_row("auto-next", "Ir para o próximo episódio sozinho", s.auto_next).on_click(cx.listener(
-                |v, _, _, cx| {
-                    v.change_settings(|s| s.auto_next = !s.auto_next);
-                    cx.notify();
-                },
-            )))
+        v_flex()
+            .w_80()
+            .gap_3()
+            .child(Switch::new("auto-next").label("Ir para o próximo episódio sozinho").checked(s.auto_next).on_change(cx.listener(|v, on: &bool, _, cx| {
+                v.change_settings(|s| s.auto_next = *on);
+                cx.notify();
+            })))
             .when(s.auto_next, |p| {
                 p.child(
-                    div().px_3().py_2p5().text_sm().child(div().mb_2().child("Tempo da contagem")).child(
-                        div().flex().gap_1p5().children([5u8, 10, 15].map(|n| {
-                            choice_chip(SharedString::from(format!("cd-{n}")), format!("{n} s"), s.countdown_sec == n).on_click(
-                                cx.listener(move |v, _, _, cx| {
-                                    v.change_settings(|s| s.countdown_sec = n);
-                                    cx.notify();
-                                }),
-                            )
-                        })),
+                    v_flex().gap_1().child(menu_heading("Tempo da contagem", cx)).child(
+                        RadioGroup::horizontal("countdown")
+                            .children(COUNTDOWNS.map(|n| format!("{n} s")))
+                            .selected_index(COUNTDOWNS.iter().position(|n| *n == s.countdown_sec))
+                            .on_change(cx.listener(|v, ix: &usize, _, cx| {
+                                v.change_settings(|s| s.countdown_sec = COUNTDOWNS[*ix]);
+                                cx.notify();
+                            })),
                     ),
                 )
             })
-            .child(toggle_row("skip-intro", "Mostrar \"Pular abertura\"", s.show_skip_intro).on_click(cx.listener(
-                |v, _, _, cx| {
-                    v.change_settings(|s| s.show_skip_intro = !s.show_skip_intro);
-                    cx.notify();
-                },
-            )))
-            .child(div().my_1().border_t_1().border_color(theme::line()))
-            .child(lang_row("sub-lang", "Legenda preferida", s.sub_lang.clone(), true))
-            .child(lang_row("audio-lang", "Áudio preferido", s.audio_lang.clone(), false))
-            .child(div().my_1().border_t_1().border_color(theme::line()))
+            .child(Switch::new("skip-intro").label("Mostrar “Pular abertura”").checked(s.show_skip_intro).on_change(cx.listener(|v, on: &bool, _, cx| {
+                v.change_settings(|s| s.show_skip_intro = *on);
+                cx.notify();
+            })))
+            .child(Divider::horizontal())
+            .child(lang_group("sub-lang", "Legenda preferida", &s.sub_lang, true, cx))
+            .child(lang_group("audio-lang", "Áudio preferido", &s.audio_lang, false, cx))
+            .child(Divider::horizontal())
             .child(
-                div().px_3().py_2p5().text_sm().child(div().mb_2().child("Memória à frente")).child(
-                    div().flex().gap_1p5().children([100u32, 150, 300, 500].map(|n| {
-                        choice_chip(SharedString::from(format!("mem-{n}")), format!("{n} MB"), s.cache_mib == n).on_click(
-                            cx.listener(move |v, _, _, cx| {
-                                v.change_settings(|s| s.cache_mib = n);
-                                cx.notify();
-                            }),
-                        )
-                    })),
+                v_flex().gap_1().child(menu_heading("Memória à frente", cx)).child(
+                    RadioGroup::horizontal("cache")
+                        .children(CACHES.map(|n| format!("{n} MB")))
+                        .selected_index(CACHES.iter().position(|n| *n == s.cache_mib))
+                        .on_change(cx.listener(|v, ix: &usize, _, cx| {
+                            v.change_settings(|s| s.cache_mib = CACHES[*ix]);
+                            cx.notify();
+                        })),
                 ),
             )
     }
 
     fn render_episodes(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let current = self.file().name.clone();
-        panel("episodes-menu", 384.).child(heading("Episódios")).children(video_files(&self.target.files).into_iter().map(|f| {
+        v_flex().id("episodes-list").w_96().max_h_96().overflow_y_scroll().child(menu_heading("Episódios", cx)).children(video_files(&self.target.files).into_iter().map(|f| {
             let n = episode_number(&f.name);
             let p = self.data.progress.get(&join_path(&self.target.dir, &f.name)).cloned();
             let is_current = f.name == current;
             let label = n.map_or_else(|| parse_episode(&f.name).label, |n| format!("Episódio {n}"));
-            let id = SharedString::from(format!("ep-{}", f.name));
-            div()
-                .id(id)
-                .flex()
-                .items_center()
+            h_flex()
+                .id(ElementId::Name(format!("ep:{}", f.name).into()))
                 .gap_3()
-                .px_3()
+                .px_2()
                 .py_2()
-                .rounded_lg()
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::white_a(0.08)))
-                .when(is_current, |d| d.bg(theme::accent_soft()))
+                .rounded(theme.radius)
+                .map(|d| if is_current { d.bg(theme.list_active) } else { d.hover(|s| s.bg(theme.list_hover)) })
                 .child(
                     div()
                         .w_8()
                         .flex_none()
-                        .flex()
-                        .justify_center()
+                        .text_center()
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(if is_current { theme::accent_ink() } else { theme::muted() })
+                        .text_color(if is_current { theme.primary_ink() } else { theme.muted_foreground })
                         .child(n.map_or("·".to_string(), |n| n.to_string())),
                 )
                 .child(
-                    div()
+                    v_flex()
                         .flex_1()
                         .min_w_0()
+                        .gap_1()
                         .child(truncate(label).text_sm())
-                        .children(p.as_ref().map(|p| {
-                            let frac = if p.watched { 1. } else { (p.position / p.duration.max(1.)).min(1.) };
-                            div()
-                                .mt_1()
-                                .h(px(2.))
-                                .rounded_full()
-                                .bg(theme::white_a(0.12))
-                                .child(div().h_full().w(relative(frac as f32)).bg(theme::accent()))
+                        .children(p.as_ref().filter(|p| !p.watched).map(|p| {
+                            ProgressBar::new(ElementId::Name(format!("ep-progress:{}", f.name).into())).xsmall().value((p.position / p.duration.max(1.) * 100.).min(100.) as f32)
                         })),
                 )
-                .when(p.as_ref().is_some_and(|p| p.watched), |d| d.child(icon("check").size_4().text_color(theme::ok())))
+                .when(p.as_ref().is_some_and(|p| p.watched), |d| d.child(Icon::new(IconName::Check).small().text_color(theme.success_foreground)))
                 .on_click(cx.listener(move |v, _, _, cx| v.switch_to(f.clone(), cx)))
         }))
     }
 
+    /// Barra de posição própria: mostra o que já está na memória e os capítulos,
+    /// coisa que o `Slider` do kit não tem.
     fn render_seekbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let dur = self.dur.max(0.001);
         let shown = match self.drag {
             Some(Drag::Seek(t)) => t,
@@ -960,7 +898,6 @@ impl PlayerView {
             .flex()
             .items_center()
             .h_5()
-            .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|v, e: &MouseDownEvent, _, cx| {
@@ -989,177 +926,97 @@ impl PlayerView {
                     .w_full()
                     .h_1()
                     .rounded_full()
-                    .bg(theme::white_a(0.18))
-                    .child(div().absolute().top_0().bottom_0().left_0().rounded_full().bg(theme::white_a(0.32)).w(frac(self.pos + self.cache_ahead)))
-                    .child(div().absolute().top_0().bottom_0().left_0().rounded_full().bg(theme::accent()).w(frac(shown)))
-                    .children(
-                        self.chapters
-                            .iter()
-                            .filter(|c| c.time > 0.)
-                            .map(|c| div().absolute().top(px(-1.)).bottom(px(-1.)).w(px(2.)).bg(theme::black_a(0.8)).left(frac(c.time))),
-                    ),
+                    .bg(theme::media_track(0.2))
+                    .child(div().absolute().top_0().bottom_0().left_0().rounded_full().bg(theme::media_track(0.35)).w(frac(self.pos + self.cache_ahead)))
+                    .child(div().absolute().top_0().bottom_0().left_0().rounded_full().bg(theme.primary).w(frac(shown)))
+                    // Divisas de capítulo: um traço escuro de 1 px físico sobre o trilho.
+                    .children(self.chapters.iter().filter(|c| c.time > 0.).map(|c| div().absolute().top_0().bottom_0().w(px(2.)).bg(theme::media_scrim(0.8)).left(frac(c.time)))),
             )
-            .when(self.dur > 0., |d| {
-                d.child(div().absolute().size(px(14.)).ml(px(-7.)).rounded_full().bg(theme::white()).shadow_md().left(frac(shown)))
-            })
+            .when(self.dur > 0., |d| d.child(div().absolute().size_3p5().ml(rems(-0.4375)).rounded_full().bg(theme::on_media()).shadow_md().left(frac(shown))))
             .children(hover.map(|(x, t)| {
                 div()
                     .absolute()
-                    .bottom(px(24.))
+                    .bottom_6()
                     .left(x - px(24.))
                     .px_2()
                     .py_0p5()
-                    .rounded_md()
-                    .bg(theme::black_a(0.85))
+                    .rounded(theme.radius)
+                    .bg(theme.popover)
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .child(format_time(t))
             }))
     }
 
+    fn menu_popover(&self, id: &'static str, menu: Menu, icon: IconName, tip: &'static str, content: AnyElement, cx: &mut Context<Self>) -> impl IntoElement {
+        Popover::new(id)
+            .anchor(gpui_kit::Anchor::BottomRight)
+            .open(self.menu == Some(menu))
+            .on_open_change(cx.listener(move |v, open: &bool, _, cx| {
+                v.menu = if *open { Some(menu) } else if v.menu == Some(menu) { None } else { v.menu };
+                cx.notify();
+            }))
+            .trigger(Button::new(ElementId::Name(format!("{id}-trigger").into())).ghost().icon(icon).tooltip(tip))
+            .child(content)
+    }
+
     fn render_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let vol_icon = if self.muted || self.volume == 0. {
-            "volume-x"
+            IconName::VolumeX
         } else if self.volume < 50. {
-            "volume-1"
+            IconName::Volume1
         } else {
-            "volume-2"
+            IconName::Volume2
         };
-        let vol = if self.muted { 0. } else { self.volume };
-        let vb = self.volume_bounds.clone();
-        let menu = self.menu;
-        div()
-            .flex()
-            .items_center()
+        let tracks = self.render_tracks(cx).into_any_element();
+        let settings = self.render_settings(cx).into_any_element();
+        let episodes = self.render_episodes(cx).into_any_element();
+        h_flex()
             .gap_1()
-            .child(icon_button("play", if self.paused { "play" } else { "pause" }).on_click(cx.listener(|v, _, _, cx| {
+            .child(Button::new("play").ghost().icon(if self.paused { IconName::Play } else { IconName::Pause }).tooltip(if self.paused { "Tocar (Espaço)" } else { "Pausar (Espaço)" }).on_click(cx.listener(|v, _, _, cx| {
                 v.toggle_pause();
                 cx.notify();
             })))
-            .child(
-                icon_button("next", "skip-forward")
-                    .when(self.next().is_none(), |b| b.opacity(0.35))
-                    .on_click(cx.listener(|v, _, _, cx| v.go_next(cx))),
-            )
-            .child(icon_button("mute", vol_icon).on_click(cx.listener(|v, _, _, cx| {
+            .child(Button::new("next").ghost().icon(IconName::SkipForward).tooltip("Próximo episódio (N)").disabled(self.next().is_none()).on_click(cx.listener(|v, _, _, cx| v.go_next(cx))))
+            .child(Button::new("mute").ghost().icon(vol_icon).tooltip(if self.muted { "Tirar do mudo (M)" } else { "Mudo (M)" }).on_click(cx.listener(|v, _, _, cx| {
                 v.toggle_mute();
                 cx.notify();
             })))
+            .child(div().w_24().child(Slider::new(&self.volume_slider).accessibility_label("Volume")))
+            .child(div().ml_2().flex_none().text_sm().text_color(theme::on_media_muted()).child(format!("{} / {}", format_time(self.pos), format_time(self.dur))))
+            .child(h_flex().flex_1().min_w_0().px_4().justify_center().text_sm().font_weight(FontWeight::MEDIUM).child(truncate(episode_label(&self.file().name))))
+            .child(self.menu_popover("tracks-menu", Menu::Tracks, IconName::Captions, "Legenda e áudio", tracks, cx))
+            .child(self.menu_popover("settings-menu", Menu::Settings, IconName::Settings2, "Ajustes", settings, cx))
+            .child(self.menu_popover("episodes-menu", Menu::Episodes, IconName::ListVideo, "Episódios", episodes, cx))
             .child(
-                div()
-                    .id("volume")
-                    .relative()
-                    .w(px(96.))
-                    .h_5()
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|v, e: &MouseDownEvent, _, cx| {
-                            v.drag = Some(Drag::Volume);
-                            v.drag_to(e.position.x);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
-                    .child(canvas(move |b, _, _| vb.set(b), |_, _, _, _| {}).absolute().size_full())
-                    .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .h_1()
-                            .rounded_full()
-                            .bg(theme::white_a(0.18))
-                            .child(div().absolute().top_0().bottom_0().left_0().rounded_full().bg(theme::white()).w(relative((vol / 100.) as f32))),
-                    ),
-            )
-            .child(
-                div()
-                    .ml_2()
-                    .flex_none()
-                    .text_sm()
-                    .text_color(theme::muted())
-                    .child(format!("{} / {}", format_time(self.pos), format_time(self.dur))),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .px_4()
-                    .flex()
-                    .justify_center()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(truncate(episode_label(&self.file().name))),
-            )
-            .child(icon_toggle("tracks", "captions", menu == Some(Menu::Tracks)).on_click(cx.listener(|v, _, _, cx| {
-                v.toggle_menu(Menu::Tracks);
-                cx.notify();
-            })))
-            .child(icon_toggle("settings", "settings-2", menu == Some(Menu::Settings)).on_click(cx.listener(|v, _, _, cx| {
-                v.toggle_menu(Menu::Settings);
-                cx.notify();
-            })))
-            .child(icon_toggle("episodes", "list-video", menu == Some(Menu::Episodes)).on_click(cx.listener(|v, _, _, cx| {
-                v.toggle_menu(Menu::Episodes);
-                cx.notify();
-            })))
-            .child(
-                icon_button("fullscreen", if window.is_fullscreen() { "minimize" } else { "maximize" })
+                Button::new("fullscreen")
+                    .ghost()
+                    .icon(if window.is_fullscreen() { IconName::Minimize } else { IconName::Maximize })
+                    .tooltip(if window.is_fullscreen() { "Sair da tela cheia (F)" } else { "Tela cheia (F)" })
                     .on_click(|_, window, _| window.toggle_fullscreen()),
             )
     }
 
     fn render_next_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = self.next().map_or_else(String::new, |n| {
-            episode_number(&n.name).map_or_else(|| n.name.clone(), |num| format!("Episódio {num}"))
-        });
+        let label = self.next().map_or_else(String::new, |n| episode_number(&n.name).map_or_else(|| n.name.clone(), |num| format!("Episódio {num}")));
         let total = self.settings().countdown_sec as f64;
         let fill = self.countdown.map_or(0., |left| 1. - left / total.max(1.));
-        div()
+        media_card(cx)
             .id("next-card")
             .occlude()
-            .w(px(320.))
-            .p_4()
-            .rounded_2xl()
-            .border_1()
-            .border_color(theme::line_strong())
-            .bg(gpui::Rgba { a: 0.92, ..theme::surface() })
-            .shadow_lg()
+            .w_80()
             .on_click(|_, _, cx| cx.stop_propagation())
-            .child(div().text_xs().text_color(theme::muted()).child(match self.countdown {
-                Some(left) => format!("Próximo episódio em {}", left.ceil() as u32),
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(match self.countdown {
+                Some(left) => format!("Próximo episódio em {} s", left.ceil() as u32),
                 None => "Próximo episódio".into(),
             }))
-            .child(truncate(label).mt_0p5().mb_3().font_weight(FontWeight::SEMIBOLD))
+            .child(truncate(label).font_weight(FontWeight::SEMIBOLD))
+            .when(self.countdown.is_some(), |d| d.child(ProgressBar::new("next-countdown").xsmall().value((fill * 100.) as f32)))
             .child(
-                div()
-                    .flex()
+                h_flex()
                     .gap_2()
-                    .child(
-                        div()
-                            .id("watch-next")
-                            .relative()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap_1p5()
-                            .overflow_hidden()
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .bg(theme::accent())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .cursor_pointer()
-                            .child(div().absolute().top_0().bottom_0().left_0().bg(theme::white_a(0.3)).w(relative(fill as f32)))
-                            .child(icon("play").size_4())
-                            .child("Assistir agora")
-                            .on_click(cx.listener(|v, _, _, cx| v.go_next(cx))),
-                    )
-                    .child(button("cancel-next", "Cancelar", false).on_click(cx.listener(|v, _, _, cx| {
+                    .child(Button::new("watch-next").primary().icon(IconName::Play).label("Assistir agora").flex_1().on_click(cx.listener(|v, _, _, cx| v.go_next(cx))))
+                    .child(Button::new("cancel-next").ghost().label("Cancelar").on_click(cx.listener(|v, _, _, cx| {
                         v.next_cancelled = true;
                         v.countdown = None;
                         v.countdown_task = None;
@@ -1172,11 +1029,14 @@ impl PlayerView {
 impl Render for PlayerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let hidden = self.controls_hidden();
+        // Estado da plataforma espelhando o da tela; idempotente.
+        self.surface.set_cursor_hidden(hidden);
         let surface = self.surface.clone();
         let title = self.target.anime_title.clone();
         let ep = episode_label(&self.file().name);
         let show_next = self.show_next();
         let show_skip = self.show_skip() && !show_next;
+        let theme = cx.theme().clone();
 
         div()
             .id("player")
@@ -1186,8 +1046,7 @@ impl Render for PlayerView {
             .size_full()
             .flex()
             .flex_col()
-            .text_color(theme::fg())
-            .when(hidden, |d| d.cursor(CursorStyle::None))
+            .text_color(theme::on_media())
             .on_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| {
                 if v.drag.is_some() {
@@ -1230,29 +1089,28 @@ impl Render for PlayerView {
                 .absolute()
                 .size_full(),
             )
-            // Barra de título sobreposta (some com o mouse parado)
-            .when(!hidden, |d| d.child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_2()
-                    .h_12()
-                    .pl_2()
-                    .pr_4()
-                    .bg(gradient_down(0.75))
-                    .child(icon_button("back", "arrow-left").on_click(cx.listener(|v, _, window, cx| v.close(window, cx))))
-                    .child(
-                        div()
-                            .flex()
-                            .min_w_0()
-                            .flex_1()
-                            .text_sm()
-                            .child(truncate(title).flex_none().max_w(relative(0.7)).font_weight(FontWeight::SEMIBOLD))
-                            .child(div().flex_none().text_color(theme::muted()).child(format!(" · {ep}"))),
-                    ),
-            ))
-            // Área do vídeo: clique pausa, duplo clique alterna tela cheia
+            // Topo sobreposto (some com o mouse parado).
+            .when(!hidden, |d| {
+                d.child(
+                    h_flex()
+                        .flex_none()
+                        .gap_2()
+                        .h_12()
+                        .pl_2()
+                        .pr_4()
+                        .bg(scrim_down(0.75))
+                        .child(Button::new("back").ghost().icon(IconName::ArrowLeft).tooltip("Voltar (Esc)").on_click(cx.listener(|v, _, window, cx| v.close(window, cx))))
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .flex_1()
+                                .text_sm()
+                                .child(truncate(title).flex_none().max_w(relative(0.7)).font_weight(FontWeight::SEMIBOLD))
+                                .child(div().flex_none().text_color(theme::on_media_muted()).child(format!(" · {ep}"))),
+                        ),
+                )
+            })
+            // Área do vídeo: clique pausa, duplo clique alterna tela cheia.
             .child(
                 div()
                     .id("video-area")
@@ -1271,60 +1129,30 @@ impl Render for PlayerView {
                         cx.notify();
                     }))
                     .when(self.buffering && !self.net_error && !self.fatal && self.broken.is_none(), |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(div().size_10().text_color(theme::white_a(0.8)).child(spinner("buffering"))),
-                        )
+                        d.child(h_flex().absolute().inset_0().justify_center().child(Spinner::new().large().color(theme::on_media_muted())))
                     })
                     .when_some(self.broken.clone(), |d, msg| {
                         d.child(
-                            div().absolute().inset_0().flex().items_center().justify_center().child(
-                                div()
-                                    .flex()
-                                    .flex_col()
+                            h_flex().absolute().inset_0().justify_center().child(
+                                media_card(cx)
                                     .items_center()
-                                    .gap_2()
-                                    .px_6()
-                                    .py_5()
-                                    .rounded_2xl()
-                                    .bg(theme::black_a(0.8))
                                     .text_sm()
-                                    .child(icon("circle-alert").text_color(theme::danger()))
+                                    .child(Icon::new(IconName::CircleAlert).text_color(theme.danger_foreground))
                                     .child("O motor de vídeo (mpv) não abriu.")
-                                    .child(div().text_xs().text_color(theme::muted()).child(msg)),
+                                    .child(div().text_xs().text_color(theme.muted_foreground).child(msg)),
                             ),
                         )
                     })
                     .when(self.fatal, |d| {
                         d.child(
-                            div().absolute().inset_0().flex().items_center().justify_center().child(
-                                div()
-                                    .flex()
-                                    .flex_col()
+                            h_flex().absolute().inset_0().justify_center().child(
+                                media_card(cx)
                                     .items_center()
-                                    .gap_3()
-                                    .px_6()
-                                    .py_5()
-                                    .rounded_2xl()
-                                    .border_1()
-                                    .border_color(theme::line_strong())
-                                    .bg(theme::black_a(0.8))
                                     .text_sm()
-                                    .child(icon("circle-alert").size_6().text_color(theme::danger()))
-                                    .child("Não foi possível tocar este arquivo.")
-                                    .child(
-                                        div()
-                                            .max_w(px(288.))
-                                            .text_xs()
-                                            .text_color(theme::muted())
-                                            .child("Pode ser a conexão, a sessão expirada ou um arquivo indisponível na nuvem."),
-                                    )
-                                    .child(button("retry", "Tentar de novo", true).mt_1().on_click(cx.listener(|v, _, _, cx| {
+                                    .child(Icon::new(IconName::CircleAlert).text_color(theme.danger_foreground))
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Não foi possível tocar este arquivo"))
+                                    .child(div().max_w_72().text_center().text_xs().text_color(theme.muted_foreground).child("Pode ser a conexão, a sessão expirada ou um arquivo indisponível na nuvem."))
+                                    .child(Button::new("retry").primary().small().icon(IconName::RefreshCw).label("Tentar de novo").on_click(cx.listener(|v, _, _, cx| {
                                         cx.stop_propagation();
                                         v.retry_attempt = 0;
                                         v.fatal = false;
@@ -1336,77 +1164,38 @@ impl Render for PlayerView {
                     })
                     .when(self.net_error, |d| {
                         d.child(
-                            div().absolute().inset_0().flex().items_center().justify_center().child(
-                                div()
-                                    .flex()
+                            h_flex().absolute().inset_0().justify_center().child(
+                                media_card(cx)
+                                    .flex_row()
                                     .items_center()
                                     .gap_3()
-                                    .px_5()
-                                    .py_3()
-                                    .rounded_xl()
-                                    .border_1()
-                                    .border_color(theme::line_strong())
-                                    .bg(theme::black_a(0.75))
                                     .text_sm()
-                                    .child(icon("wifi-off").text_color(theme::danger()))
+                                    .child(Icon::new(IconName::WifiOff).text_color(theme.danger_foreground))
                                     .child("Sem conexão com a nuvem. Tentando de novo…"),
                             ),
                         )
                     }),
             )
-            // Pular abertura / próximo episódio: acima dos controles, mesmo com eles escondidos
+            // Pular abertura / próximo episódio: acima dos controles, mesmo com eles escondidos.
             .child(
-                div()
+                v_flex()
                     .absolute()
                     .right_5()
-                    .bottom(px(if hidden { 24. } else { 112. }))
-                    .flex()
-                    .flex_col()
+                    .map(|d| if hidden { d.bottom_6() } else { d.bottom_24() })
                     .items_end()
                     .gap_3()
                     .when(show_skip, |d| {
-                        d.child(
-                            div()
-                                .id("skip-intro")
-                                .occlude()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_4()
-                                .py_2p5()
-                                .rounded_xl()
-                                .border_1()
-                                .border_color(theme::line_strong())
-                                .bg(theme::black_a(0.7))
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .cursor_pointer()
-                                .hover(|s| s.border_color(theme::accent()).bg(theme::black_a(0.85)))
-                                .child("Pular abertura")
-                                .child(icon("chevrons-right").text_color(theme::accent_ink()))
-                                .on_click(cx.listener(|v, _, _, cx| {
-                                    cx.stop_propagation();
-                                    v.skip_intro();
-                                    cx.notify();
-                                })),
-                        )
+                        d.child(Button::new("skip-intro").icon(IconName::ChevronsRight).label("Pular abertura").tooltip("Pular abertura (S)").on_click(cx.listener(|v, _, _, cx| {
+                            cx.stop_propagation();
+                            v.skip_intro();
+                            cx.notify();
+                        })))
                     })
                     .when(show_next, |d| d.child(self.render_next_card(cx))),
             )
-            .when(self.menu == Some(Menu::Tracks), |d| d.child(self.render_tracks(cx)))
-            .when(self.menu == Some(Menu::Settings), |d| d.child(self.render_settings(cx)))
-            .when(self.menu == Some(Menu::Episodes), |d| d.child(self.render_episodes(cx)))
-            // Controles inferiores
-            .when(!hidden, |d| d.child(
-                div()
-                    .id("controls")
-                    .flex_none()
-                    .px_5()
-                    .pt_10()
-                    .pb_3()
-                    .bg(gradient_up(0.85))
-                    .child(self.render_seekbar(cx))
-                    .child(self.render_controls(window, cx)),
-            ))
+            // Controles inferiores.
+            .when(!hidden, |d| {
+                d.child(v_flex().id("controls").flex_none().gap_1().px_5().pt_10().pb_3().bg(scrim_up(0.85)).child(self.render_seekbar(cx)).child(self.render_controls(window, cx)))
+            })
     }
 }
