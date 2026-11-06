@@ -1,0 +1,113 @@
+{
+  "$schema": "https://github.com/longbridge/gpui-kit/raw/refs/heads/main/.theme-schema.json",
+  "name": "Higanbana",
+  "author": "higanbana",
+  "themes": [
+    {
+      "is_default": true,
+      "name": "Higanbana Dark",
+      "mode": "dark",
+      "radius": 8,
+      "radius.lg": 12,
+      "shadow": true,
+      "colors": {
+        "background": "#07070a",
+        "foreground": "#ededef",
+        "border": "#ffffff14",
+        "input.border": "#ffffff24",
+        "ring": "#e8283c",
+        "caret": "#ededef",
+        "selection.background": "#e8283c59",
+        "overlay": "#00000099",
+        "window.border": "#ffffff14",
+
+        "accent.background": "#ffffff0f",
+        "accent.foreground": "#ededef",
+        "muted.background": "#18181f",
+        "muted.foreground": "#9a9ea8",
+
+        "primary.background": "#e8283c",
+        "primary.hover.background": "#f03a4d",
+        "primary.active.background": "#c81f31",
+        "primary.foreground": "#ffffff",
+
+        "secondary.background": "#18181f",
+        "secondary.hover.background": "#1f1f28",
+        "secondary.active.background": "#26262f",
+        "secondary.foreground": "#ededef",
+
+        "group_box.background": "#111118",
+        "group_box.foreground": "#ededef",
+        "popover.background": "#111118",
+        "popover.foreground": "#ededef",
+        "accordion.background": "#111118",
+
+        "danger.background": "#f87171",
+        "danger.foreground": "#fca5a5",
+        "success.background": "#4ade80",
+        "success.foreground": "#86efac",
+        "warning.background": "#facc15",
+        "warning.foreground": "#fde047",
+        "info.background": "#22d3ee",
+        "info.foreground": "#67e8f9",
+
+        "link.foreground": "#ff7a85",
+        "link.hover.foreground": "#ff9aa2",
+        "link.active.foreground": "#ff7a85",
+
+        "list.background": "#07070a",
+        "list.hover.background": "#ffffff0a",
+        "list.active.background": "#e8283c26",
+        "list.active.border": "#e8283c",
+        "list.even.background": "#ffffff05",
+        "list.head.background": "#0b0b10",
+
+        "sidebar.background": "#0b0b10",
+        "sidebar.foreground": "#ededef",
+        "sidebar.border": "#ffffff14",
+        "sidebar.accent.background": "#ffffff0f",
+        "sidebar.accent.foreground": "#ffffff",
+        "sidebar.primary.background": "#e8283c",
+        "sidebar.primary.foreground": "#ffffff",
+
+        "title_bar.background": "#07070a",
+        "title_bar.border": "#ffffff14",
+        "status_bar.background": "#07070a",
+        "status_bar.border": "#ffffff14",
+
+        "tab.background": "#00000000",
+        "tab.foreground": "#9a9ea8",
+        "tab.active.background": "#18181f",
+        "tab.active.foreground": "#ededef",
+        "tab_bar.background": "#00000000",
+        "tab_bar.segmented.background": "#111118",
+
+        "skeleton.background": "#111118",
+        "progress_bar.background": "#e8283c",
+        "slider.bar.background": "#e8283c",
+        "slider.thumb.background": "#ffffff",
+        "switch.background": "#2a2a33",
+        "scrollbar.background": "#00000000",
+        "scrollbar.thumb.background": "#ffffff26",
+        "scrollbar.thumb.hover.background": "#ffffff40",
+
+        "table.background": "#07070a",
+        "table.head.foreground": "#9a9ea8",
+        "table.row.border": "#ffffff0f",
+
+        "base.red": "#e8283c",
+        "base.red.light": "#ff7a85",
+        "base.green": "#4ade80",
+        "base.green.light": "#86efac",
+        "base.blue": "#60a5fa",
+        "base.blue.light": "#93c5fd",
+        "base.yellow": "#facc15",
+        "base.yellow.light": "#fde047",
+        "base.magenta": "#c084fc",
+        "base.magenta.light": "#d8b4fe",
+        "base.cyan": "#22d3ee",
+        "base.cyan.light": "#67e8f9"
+      }
+    }
+  ]
+}
