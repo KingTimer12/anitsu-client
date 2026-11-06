@@ -21,12 +21,14 @@ Aplicativo desktop não oficial para navegar e baixar do acervo da [Anitsu](http
   - contagem para o próximo episódio, que pode ser desligada;
   - continuar de onde parou;
   - legenda e áudio lembrados por release.
+- **Ler mangá sem baixar:** abre `.cbz`/`.zip`/`.cbr`/`.rar` da nuvem página por página, em página única, página dupla ou rolagem contínua, da direita para a esquerda ou da esquerda para a direita, e continua de onde parou.
+- **Ouvir OSTs:** cada álbum tem encarte com capa, faixas e discos. A barra de música fica embaixo da janela enquanto navega, com aleatório, repetir, volume igualado entre álbuns e as teclas de mídia do teclado.
 - **Downloads:** episódio por episódio ou "Baixar todos", com fila (2 ao mesmo tempo) e progresso na barra de título.
 
 ## Requisitos
 
 - Uma conta na Anitsu (o login é só via Discord e o cadastro de contas novas é feito pela própria Anitsu).
-- Para desenvolver: [Bun](https://bun.sh/), [Rust](https://www.rust-lang.org/tools/install) e os [pré-requisitos do Tauri](https://tauri.app/start/prerequisites/) para o seu sistema.
+- Para desenvolver: [Rust](https://www.rust-lang.org/tools/install). No Windows, as ferramentas de build do Visual Studio (C++) e o Windows SDK, que o [GPUI](https://www.gpui.rs/) usa.
 
 ## Como rodar
 
@@ -41,49 +43,45 @@ No build, a chave é embutida no executável mascarada, sem aparecer em texto pu
 
 ### Motor de vídeo (mpv)
 
-O player usa o [mpv](https://mpv.io/) (libmpv) por meio do [tauri-plugin-libmpv](https://github.com/nini22P/tauri-plugin-libmpv). As DLLs não ficam no repositório. Para baixá-las para `src-tauri/lib/` (Windows), rode:
-
-```sh
-cd src-tauri
-bunx tauri-plugin-libmpv-api setup-lib
-```
-
-O script baixa o `libmpv-wrapper` e uma build **LGPL** da libmpv ([zhongfly/mpv-winbuild](https://github.com/zhongfly/mpv-winbuild)). Se as DLLs ficarem em `src-tauri/src-tauri/lib/`, mova-as para `src-tauri/lib/`.
+O player de vídeo usa o [mpv](https://mpv.io/) (libmpv), carregado em tempo de execução e desenhando numa janela filha embaixo da interface GPUI. As DLLs não ficam no repositório. Ponha `libmpv-2.dll` em `crates/higanbana-desktop/lib/` (pasta no `.gitignore`) ou ao lado do executável. Use uma build **LGPL** da libmpv ([zhongfly/mpv-winbuild](https://github.com/zhongfly/mpv-winbuild)). Sem a DLL, o app abre normalmente e só o player avisa que falta o motor.
 
 ### Comandos
 
 ```sh
-bun install
-bun tauri dev      # abre o app em modo de desenvolvimento
-bun tauri build    # gera o instalador
+cargo run -p higanbana-desktop              # abre o app
+cargo build -p higanbana-desktop --release  # executável otimizado
+cargo test -p higanbana-core                # testes do núcleo
 ```
 
-Testes:
-
-```sh
-bun run test            # lógica do player (vitest)
-cd src-tauri && cargo test
-```
+O frontend web antigo (SolidJS, em `src/`) fica no repositório como base para as telas do app GPUI; ele não é mais compilado com o app.
 
 ## Como funciona
 
-| Parte | Onde | O que faz |
-| --- | --- | --- |
-| Autenticação | `src-tauri/src/auth/` | Login OAuth (PKCE) com o Discord via navegador do sistema, renovação e logout da sessão. |
-| HTTP | `src-tauri/src/http/` | Cliente com URL base e autenticação embutidas para os serviços da Anitsu. |
-| Acervo | `src-tauri/src/nuvem/` | Listagem, busca e download em stream direto para o disco. |
-| AniList | `src-tauri/src/anilist/` | Consultas em lote, casamento de nomes de pasta com títulos e cache em disco. |
-| Player | `src-tauri/src/player/` | Proxy local de stream (Range → nuvem, sessão só no Rust), AniSkip com cache e progresso/configurações em `player.json`. |
-| Interface | `src/` | SolidJS + Tailwind CSS, com barra de título própria. |
+Dois crates num workspace Cargo:
 
-**Privacidade:** os tokens de sessão ficam só no lado Rust e são gravados na pasta de dados do aplicativo no seu computador. Eles nunca são expostos ao JavaScript da interface nem enviados a outro lugar além dos próprios servidores da Anitsu.
+- `crates/higanbana-core`: tudo que não depende de interface. Cria um `Core` com os serviços abaixo e avisa mudanças (sessão, downloads, música) por eventos.
+- `crates/higanbana-desktop`: o app, feito com [GPUI](https://www.gpui.rs/) (a interface do Zed).
+
+| Parte | Onde (`crates/higanbana-core/src/`) | O que faz |
+| --- | --- | --- |
+| Autenticação | `auth/` | Login OAuth (PKCE) com o Discord via navegador do sistema, renovação e logout da sessão. |
+| HTTP | `http/` | Cliente com URL base e autenticação embutidas para os serviços da Anitsu. |
+| Acervo | `nuvem/` | Listagem, busca e download em stream direto para o disco. |
+| AniList | `anilist/` | Consultas em lote, casamento de nomes de pasta com títulos e cache em disco. |
+| Player | `player/` | Proxy local de stream (Range → nuvem), AniSkip com cache e progresso/configurações em `player.json`. |
+| Leitor | `reader/` | Abre `.cbz`/`.zip`/`.cbr`/`.rar` da nuvem por pedaços, página por página. |
+| Música | `music/` | Lê as faixas por Range, decodifica, iguala o volume e toca, com teclas de mídia. |
+
+Os dados ficam na mesma pasta que a versão Tauri usava (`dev.kingtimer12.higanbana`), então sessão, progresso e caches continuam valendo.
+
+**Privacidade:** os tokens de sessão ficam só no núcleo e são gravados na pasta de dados do aplicativo no seu computador. Eles nunca são enviados a outro lugar além dos próprios servidores da Anitsu.
 
 **Uso leve das APIs:** consultas ao AniList são agrupadas e guardadas em cache; a checagem de quais animes estão no acervo só acontece quando o card aparece na tela, com poucos pedidos em paralelo.
 
 ## Créditos
 
 - [mpv](https://mpv.io/): motor de vídeo, usado como biblioteca dinâmica (build LGPL; licença do mpv: LGPL-2.1+ / GPL-2.0+ conforme a build).
-- [tauri-plugin-libmpv](https://github.com/nini22P/tauri-plugin-libmpv) (MPL-2.0).
+- [GPUI](https://www.gpui.rs/) (Apache-2.0), do editor Zed.
 - [AniSkip](https://aniskip.com/): tempos de abertura e encerramento enviados pela comunidade, usados quando o arquivo não tem capítulos.
 
 ## Licença
